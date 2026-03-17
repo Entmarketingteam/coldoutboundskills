@@ -1,121 +1,107 @@
 # Cold Outbound Skills
 
-Open-source [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skills) for cold email and outbound sales. Built by [GrowthEngineX](https://growthengine-x.com) from patterns across 1,000+ real B2B campaigns.
+Open-source [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) for cold email infrastructure and copywriting. Built by [GrowthEngineX](https://growthengine-x.com) from patterns across 1,000+ real B2B campaigns.
 
-Each skill is a self-contained folder with a `SKILL.md` file that teaches Claude how to complete a specific outbound task. No API keys are included — bring your own accounts and credentials.
+Each skill is a standalone `SKILL.md` file that gives Claude deep expertise in a specific cold outbound workflow. No API keys included — bring your own.
 
 ## Skills
 
-| Skill | What It Does | Accounts Needed |
-|-------|-------------|-----------------|
-| [Cold Email Copy Grader](./skills/cold-email-copy-grader/) | Grade campaigns 0-100, get risk flags and rewrites | None |
-| [Prospeo Full Export](./skills/prospeo-full-export/) | Export entire Prospeo searches to CSV (even 25K+) | [Prospeo](https://prospeo.io) |
-| [Google Maps Scraper](./skills/google-maps-scraper/) | Scrape business listings by query + location, export to CSV | [RapidAPI](https://rapidapi.com/alexanderxbx/api/maps-data) |
-
----
-
-### Cold Email Copy Grader
-
-Grade your cold email campaigns on a 0-100 scale. Paste your draft sequences and targeting details, get back a score, risk flags, benchmark comparisons, and full copywriting rewrites when your copy needs work.
-
-- Score breakdown by copywriting quality, targeting, and personalization
-- Risk assessment catching 15 anti-patterns (spam triggers, bump-only follow-ups, weak CTAs)
-- Benchmark comparison against top-performing campaigns
-- Full rewrites when your score is below 65
-- Quick grade mode for a fast gut check
-
-**No external accounts needed.** Everything runs from the patterns baked into the skill.
-
-**Key finding:** Generic AI personalization — where AI describes what the prospect's company does — has a 71% poor rate. It performs 4x worse than no personalization at all.
-
-See the [worked example](./skills/cold-email-copy-grader/examples/before-and-after.md) showing a campaign go from 38 to 66.
-
----
-
-### Prospeo Full Export
-
-Export your entire [Prospeo](https://prospeo.io) people search to CSV. Build your search in Prospeo's UI, then let Claude pull every single result via the API — even searches over 25,000 results.
-
-- Translates your Prospeo UI filters into API calls automatically
-- Paginates through every page and exports to CSV
-- Handles rate limiting and retry logic
-- Deduplicates contacts by LinkedIn URL
-- Automatically splits US-wide searches by state to bypass the 25K result cap
-
-**Requires:** A [Prospeo](https://prospeo.io) account with API credits. The skill walks you through signup and API key setup.
-
----
-
-### Google Maps Scraper
-
-Scrape Google Maps for business listings by search query and location. Give it "pizza restaurant" and a state, city, or list of zip codes — get back structured data (name, address, phone, website, rating, reviews, coordinates) as a CSV.
-
-- Searches by query + zip code, city, or entire US state
-- Bundled with 42,734 US zip codes (filter by state, city, or population)
-- Rate limiting (2 req/sec) with automatic retries
-- Deduplicates results across overlapping zip code searches
-- Run as a local CLI or deploy as a web app
-- Export to CSV
-
-**Requires:** A [RapidAPI](https://rapidapi.com) account with a subscription to the [Maps Data API](https://rapidapi.com/alexanderxbx/api/maps-data) (free tier available).
-
-```bash
-# Scrape all pizza places in Texas (populated zips only)
-npm run scrape -- --query="pizza restaurant" --state=TX --min-pop=5000
-
-# Scrape dentists in specific NYC zip codes
-npm run scrape -- --query="dentist" --zips=10014,10013,10012
-```
-
----
+| Skill | What It Does |
+|-------|-------------|
+| [Cold Email Copy Grader](skills/cold-email-copy-grader/) | Grades your cold email campaigns 0-100. Scores copywriting, targeting, and personalization. Catches the AI personalization trap (71% poor rate). Rewrites bad copy. |
+| [Domain Setup: Dynadot + Zapmail](skills/domain-setup-dynadot-zapmail/) | End-to-end domain setup — generate short names, check availability, purchase on Dynadot, switch nameservers, connect on Zapmail, create inboxes, export to your sending platform. |
 
 ## Installation
 
-### Claude Code (Recommended)
+### Option 1: Install a Single Skill
 
-Copy any skill folder into your Claude Code skills directory:
+Copy the skill folder into your Claude Code skills directory:
 
 ```bash
 # Clone the repo
 git clone https://github.com/growthenginenowoslawski/coldoutboundskills.git
 
-# Copy the skills you want
+# Copy the skill you want
 cp -r coldoutboundskills/skills/cold-email-copy-grader ~/.claude/skills/
-cp -r coldoutboundskills/skills/prospeo-full-export ~/.claude/skills/
-cp -r coldoutboundskills/skills/google-maps-scraper ~/.claude/skills/
+# or
+cp -r coldoutboundskills/skills/domain-setup-dynadot-zapmail ~/.claude/skills/
 ```
 
-Then just mention the task in Claude Code:
-- "Grade this cold email" (triggers the copy grader)
-- "Export my Prospeo search to CSV" (triggers the Prospeo exporter)
-- "Scrape Google Maps for dentists in Texas" (triggers the maps scraper)
+Claude Code will automatically detect skills in `~/.claude/skills/`.
 
-### Manual Use (Any LLM)
+### Option 2: Install All Skills
 
-Each `SKILL.md` file works as a standalone system prompt. Copy the contents into any LLM's system prompt or context window and it will follow the instructions.
-
-## How Skills Work
-
-A skill is just a folder containing a `SKILL.md` file with:
-- **YAML frontmatter** (`name` and `description`) so Claude knows when to use it
-- **Markdown instructions** that Claude follows when the skill is active
-
-```
-skills/
-  my-skill/
-    SKILL.md          # Instructions and metadata
-    examples/         # Optional: worked examples
+```bash
+git clone https://github.com/growthenginenowoslawski/coldoutboundskills.git
+cp -r coldoutboundskills/skills/* ~/.claude/skills/
 ```
 
-For more on creating skills, see Anthropic's [skill creation guide](https://support.claude.com/en/articles/12512198-creating-custom-skills).
+### Option 3: Use as a System Prompt
+
+You can also copy the contents of any `SKILL.md` file directly into a system prompt for any LLM. The scoring methodology, API references, and workflows work independently of Claude Code.
+
+## Skill Details
+
+### Cold Email Copy Grader
+
+Paste your draft email sequences and targeting details. Get back a score, risk flags, benchmark comparisons, and full copywriting rewrites when your copy needs work.
+
+**What you get:**
+- Score (0-100) broken down by copywriting quality (40%), targeting (35%), and personalization (25%)
+- Risk flags that catch the 15 most common anti-patterns
+- Benchmark comparison against top-performing campaigns
+- Full rewrites when your score is below 65
+- Quick grade mode for a fast gut check
+
+**The most important finding:** Generic AI personalization — where AI describes what the prospect's company does — has a 71% poor rate and performs 4x worse than no personalization at all. The skill catches this automatically.
+
+**No dependencies.** No API keys, no database, no external tools. Everything runs from patterns baked into the skill.
+
+See [examples/before-and-after.md](skills/cold-email-copy-grader/examples/before-and-after.md) for a full worked example (score: 38 → 66).
+
+---
+
+### Domain Setup: Dynadot + Zapmail
+
+Automates the entire cold email domain lifecycle:
+
+1. **Generate** short domain name candidates using prefix/suffix patterns
+2. **Check availability** via Dynadot API (batch 100 at a time)
+3. **Purchase** available domains on Dynadot
+4. **Switch nameservers** to Zapmail's DNS
+5. **Connect** domains on Zapmail
+6. **Create inboxes** (2 per domain)
+7. **Export** to your email sending platform (Smartlead, Instantly, and 14 others)
+
+**Includes onboarding** for first-time users — walks you through getting API keys, storing them safely, and verifying access.
+
+**Requires your own API keys:**
+- Dynadot API key (for domain registration)
+- Zapmail API key (for inbox provisioning)
+
+**Covers all the gotchas** we learned from setting up 500+ domains: DNS propagation timing, batch failure retries, comma encoding bugs, provisioning wait times, and more.
+
+## What Are Claude Code Skills?
+
+[Skills](https://docs.anthropic.com/en/docs/claude-code/skills) are markdown files that give Claude specialized knowledge and workflows. When you place a `SKILL.md` file in `~/.claude/skills/`, Claude Code automatically loads it and can use that expertise in conversations.
+
+Think of skills as reusable playbooks — they encode domain knowledge, API references, scoring rubrics, and step-by-step workflows that Claude can execute on demand.
 
 ## Contributing
 
-Have a cold outbound workflow that could be a skill? Open a PR. Each skill should be:
+Want to add a skill? Create a folder in `skills/` with a `SKILL.md` file following this format:
 
-- **Self-contained** — no dependencies on other skills or internal tooling
-- **API-key-free** — never hardcode credentials; use environment variables
-- **Beginner-friendly** — include setup instructions for someone who's never used the platform
+```yaml
+---
+description: What the skill does and when to use it.
+---
+
+# Skill Name
+
+[Instructions, API references, workflows, etc.]
+```
+
+Open a PR and we'll review it.
 
 ## License
 
