@@ -51,7 +51,7 @@ A scannable cheat sheet. These are the most common patterns that kill campaigns,
 | # | Mistake | Impact | Fix |
 |---|---------|--------|-----|
 | 1 | **Generic AI first-line** ("I noticed your company does X...") | 71% poor rate, 4x worse than no personalization | Remove it. Use targeted product-focused AI or specific enriched data instead. |
-| 2 | **No follow-up sequences** (1-2 emails only) | 2-5% top-performer rate vs 12% for 4-5 sequences | Add 4-5 sequences with value-add content, not bumps. |
+| 2 | **No follow-up plan** | Campaigns often stall when there is no clear second touch | Use a short sequence with 1-2 value-add follow-ups, not bumps. Keep total follow-ups under 3. |
 | 3 | **Bump-only follow-ups** ("Just following up...") | 5% top-performer rate vs 13% for value-add | Each follow-up needs new information: case study, different angle, social proof. |
 | 4 | **Generic greeting opener** ("Hope you're doing well...") | 4% top-performer rate vs 14% for observation | Open with something specific: an observation, a question, or enriched data. |
 | 5 | **Passive CTA** ("If you're interested..." / "Feel free to...") | 50% fewer responses than direct asks | End with a direct question: "Would a 15-minute call next week work?" |
@@ -198,7 +198,7 @@ Shorter subjects correlate with better performance.
 | Breakup email present | +3 | Final sequence closure |
 | Logical escalation | +2 | Progression makes sense |
 
-**Sequence Count Performance:**
+**Historical Sequence Count Benchmark:**
 
 | Sequences | Top Performer % |
 |-----------|-----------------|
@@ -209,7 +209,7 @@ Shorter subjects correlate with better performance.
 | 5 | 12% |
 | 6+ | 8% |
 
-Optimal: 4-5 sequences. Fewer than 3 consistently underperforms.
+Recommended: keep the sequence tight. Use 1-2 value-add follow-ups after the opener, and stay under 3 follow-ups total.
 
 **Delay Between Sequences:**
 
@@ -467,9 +467,9 @@ Impact: Email likely filtered to spam.
 
 **WEAK_CTA** - CTA exists but is passive: "if you're interested", "when you have time", "no rush", "feel free". Passive CTAs get 50% fewer responses than direct asks.
 
-**INSUFFICIENT_FOLLOWUPS** - Fewer than 3 sequences.
+**NO_FOLLOWUP_PLAN** - No clear second touch or no value-add follow-up strategy.
 
-**TOO_MANY_SEQUENCES** - More than 7 sequences. Diminishing returns after 5-6.
+**TOO_MANY_SEQUENCES** - More than 3 follow-ups. Keep the sequence tighter.
 
 **LOW_DM_CONCENTRATION** - Decision-maker percentage <30%.
 
@@ -498,7 +498,7 @@ Impact: Email likely filtered to spam.
 **"Enterprise Mistake"**
 - ENTERPRISE_TARGET + EMAIL_TOO_LONG + TOO_MANY_SEQUENCES
 - Typical outcome: Poor
-- Fix: Target SMB, shorten emails, reduce to 4-5 sequences
+- Fix: Target SMB, shorten emails, and keep the sequence to 1-2 value-add follow-ups
 
 **"Spam Risk"**
 - SPAM_WARNING + FAKE_REPLY + TOO_MANY_SEQUENCES
@@ -652,11 +652,11 @@ When score < 65, generate fresh rewrites based on these rules:
 - "As a company that specializes in {{what_they_do}}..."
 
 ### Sequence Rewrites
-1. Include 4-5 sequences total
+1. Keep the sequence to 1 opener plus 1-2 value-add follow-ups
 2. Each follow-up adds new value (case study, different angle, social proof)
 3. Never write bump-only follow-ups ("just following up...")
-4. End with breakup email pattern ("last attempt" creates urgency)
-5. Consider referral ask in sequence 3-4 ("Who else should I talk to?")
+4. If needed, make the final follow-up a breakup email ("last attempt" creates urgency)
+5. If needed, use the second follow-up for a referral ask ("Who else should I talk to?")
 6. Space sequences 2-5 days apart
 7. Use conditional logic for missing data: `{{#if variable}}...{{else}}...{{/if}}`
 

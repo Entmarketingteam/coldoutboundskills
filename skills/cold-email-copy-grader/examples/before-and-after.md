@@ -75,7 +75,7 @@ Body:
 ### Risk Factors
 
 1. **WARNING: BUMP_ONLY_FOLLOWUP** (+7) - Sequence 2 adds zero value. "Just following up" is the #1 most ignored follow-up pattern (5% top-performer rate vs 13% for value-add).
-2. **WARNING: INSUFFICIENT_FOLLOWUPS** (+7) - Only 2 sequences. Campaigns with 4-5 sequences have a 11-12% top-performer rate vs 5% for 2 sequences.
+2. **WARNING: NO_FOLLOWUP_PLAN** (+7) - The sequence should be intentional, but not long. Aim for 1-2 value-add follow-ups after the opener and keep total follow-ups under 3.
 3. **WARNING: WEAK_CTA** (+7) - "Would you be open to a quick call to discuss?" is passive. Passive CTAs get 50% fewer responses than direct asks.
 4. **WARNING: NO_BREAKUP_EMAIL** (+7) - No closure sequence. Breakup emails often convert fence-sitters (10% top-performer rate).
 
