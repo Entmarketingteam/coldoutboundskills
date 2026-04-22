@@ -9,7 +9,7 @@
       "name": "coldoutboundskills",
       "description": "29 Claude Code skills for cold email infrastructure, lead sourcing, copywriting, and campaign automation.",
       "version": "1.0.0",
-      "source": "../",
+      "source": "./",
       "author": {
         "name": "GrowthEngineX"
       }
