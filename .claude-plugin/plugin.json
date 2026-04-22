@@ -1,0 +1,20 @@
+{
+  "name": "coldoutboundskills",
+  "description": "29 Claude Code skills for cold email infrastructure, lead sourcing, copywriting, and campaign automation. Built from 1000+ real B2B campaigns.",
+  "version": "1.0.0",
+  "author": {
+    "name": "GrowthEngineX"
+  },
+  "homepage": "https://github.com/Entmarketingteam/coldoutboundskills",
+  "repository": "https://github.com/Entmarketingteam/coldoutboundskills",
+  "license": "MIT",
+  "keywords": [
+    "cold-email",
+    "outbound",
+    "lead-generation",
+    "smartlead",
+    "prospeo",
+    "apollo",
+    "sales"
+  ]
+}
