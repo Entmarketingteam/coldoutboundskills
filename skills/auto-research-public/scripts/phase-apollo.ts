@@ -50,6 +50,13 @@ interface Lead {
   company_description: string;
 }
 
+// Post-filter: drop leads whose industry doesn't overlap with our target list
+function industryMatches(industry: string, targetIndustries: string[]): boolean {
+  if (!industry || !targetIndustries.length) return true; // no filter = keep all
+  const ind = industry.toLowerCase();
+  return targetIndustries.some((t) => ind.includes(t.toLowerCase()) || t.toLowerCase().includes(ind));
+}
+
 // Map Prospeo-style filters.json → Apollo search params
 function buildApolloParams(filters: any, page: number) {
   // Apollo employee range format: "50,200" strings
@@ -176,7 +183,10 @@ async function main() {
 
     // bulk_match returns full person objects (email + all company fields)
     const fullPeople = await bulkMatchPeople(people);
-    const mapped = fullPeople.map(mapPerson).filter((l) => l.first_name || l.last_name);
+    const mapped = fullPeople
+      .map(mapPerson)
+      .filter((l) => l.first_name || l.last_name)
+      .filter((l) => industryMatches(l.company_industry, filters.industries ?? []));
     all.push(...mapped);
 
     if (page % 5 === 0) console.error(`[Apollo] Page ${page}: ${all.length} leads so far`);
