@@ -39,6 +39,8 @@ function parseArgs() {
     variantsFile: get("--variants-file"),
     domain: get("--domain"),
     inboxTag: get("--inboxes-tag") ?? "active",
+    inboxDomain: get("--inbox-domain"), // fallback: filter by email domain substring
+    inboxIds: get("--inbox-ids")?.split(",").map(Number), // explicit inbox IDs
     inboxCount: Number(get("--inbox-count") ?? 10),
     clientId: get("--client-id"),
     experimentLog: get("--experiment-log"),
@@ -67,7 +69,17 @@ async function slPost(path: string, body: any, params: Record<string, any> = {})
   return resp.json();
 }
 
-async function selectInboxesByTag(tag: string, count: number): Promise<{ id: number; email: string }[]> {
+async function selectInboxes(
+  tag: string,
+  count: number,
+  inboxDomain?: string,
+  inboxIds?: number[]
+): Promise<{ id: number; email: string }[]> {
+  // Explicit IDs override everything
+  if (inboxIds?.length) {
+    return inboxIds.slice(0, count).map((id) => ({ id, email: "" }));
+  }
+
   const all: any[] = [];
   let offset = 0;
   while (true) {
@@ -77,15 +89,25 @@ async function selectInboxesByTag(tag: string, count: number): Promise<{ id: num
     if (batch.length < 100) break;
     offset += 100;
   }
-  const tagged = all.filter(
-    (i: any) =>
-      (i.tags ?? []).some((t: any) => t.name === tag) &&
-      i.is_smtp_success &&
-      !i.warmup_details?.is_warmup_blocked
-  );
-  // LRU-ish: lowest daily_sent_count first
-  tagged.sort((a, b) => (a.daily_sent_count ?? 0) - (b.daily_sent_count ?? 0));
-  return tagged.slice(0, count).map((i: any) => ({ id: i.id, email: i.from_email || i.email }));
+
+  // Filter: tagged OR (if no tag matches) domain-substring filter
+  let candidates = all.filter((i: any) => i.is_smtp_success && !i.warmup_details?.is_warmup_blocked);
+  const tagged = candidates.filter((i: any) => (i.tags ?? []).some((t: any) => t.name === tag));
+
+  if (tagged.length) {
+    candidates = tagged;
+  } else if (inboxDomain) {
+    console.error(`[Upload] No inboxes tagged '${tag}' — falling back to domain filter '${inboxDomain}'`);
+    candidates = candidates.filter((i: any) => {
+      const email: string = i.from_email || i.email || "";
+      return email.includes(inboxDomain);
+    });
+  } else {
+    throw new Error(`No inboxes matching tag=${tag} and no --inbox-domain fallback provided`);
+  }
+
+  candidates.sort((a, b) => (a.daily_sent_count ?? 0) - (b.daily_sent_count ?? 0));
+  return candidates.slice(0, count).map((i: any) => ({ id: i.id, email: i.from_email || i.email }));
 }
 
 function buildBody(variantLabel: string, campaignId: number, bodyTemplate?: string): string {
@@ -141,7 +163,7 @@ async function main() {
   console.error(`  Saved ${variants.length} variants`);
 
   // 3. Select + add inboxes
-  const inboxes = await selectInboxesByTag(args.inboxTag, args.inboxCount);
+  const inboxes = await selectInboxes(args.inboxTag, args.inboxCount, args.inboxDomain, args.inboxIds);
   if (!inboxes.length) throw new Error(`No inboxes matching tag=${args.inboxTag}`);
   let remainingIds = inboxes.map((i) => i.id);
   let retries = 0;
