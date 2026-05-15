@@ -102,7 +102,7 @@ If they share a contact: add that contact as a new lead in a different campaign 
 
 **Goal:** Honor the request immediately, log it, move on.
 
-**Legal:** CAN-SPAM gives you 10 business days. GDPR requires immediate. Always do it same-day.
+**Practical rule:** do it same-day. Same-day comfortably beats CAN-SPAM (10 business days) and GDPR (immediate).
 
 **Steps:**
 1. Add their email to the block list (both Smartlead `/domain-block-list` and Instantly `/block-list-entries` support this)
@@ -190,7 +190,7 @@ Never let replies sit unread for more than a weekend.
 
 1. **Replying from a branded account** — reply from the same inbox the cold email came from. Consistency matters for deliverability.
 2. **Over-responding** — long, flowery responses feel salesy. Keep replies shorter than the original email.
-3. **Ignoring unsubscribes** — one missed unsubscribe can be a federal CAN-SPAM violation. Block immediately.
+3. **Ignoring unsubscribes** — block immediately, across every campaign. It's also the right thing to do.
 4. **Taking offense at negatives** — "no" isn't personal. Exit gracefully, move on.
 5. **Not booking the call fast enough** — positive replies that sit for 24+ hours lose 50% of their booking potential.
 6. **Replying with a calendar link only** — offer 2 specific times first, calendar as fallback. Calendar-first feels lazy.

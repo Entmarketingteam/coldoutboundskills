@@ -97,7 +97,7 @@ Acme
 - `{from_name}` — the inbox's own `from_name` field if set (different personas per inbox), else `SENDER_FIRST_NAME + SENDER_LAST_NAME` from `.env`
 - `{title}` — `SENDER_TITLE` env var
 - `{company}` — `SENDER_COMPANY_NAME` env var
-- `{address}` — `SENDER_PHYSICAL_ADDRESS` env var (REQUIRED by CAN-SPAM — always include a real mailing address)
+- `{address}` — `SENDER_PHYSICAL_ADDRESS` env var (recommended — a real mailing address in the footer keeps you on the right side of CAN-SPAM and similar rules)
 
 **Required `.env` entries for the default template:**
 ```
@@ -130,7 +130,7 @@ In Smartlead sequences, always end the body with `%signature%` — Smartlead inj
 %signature%
 ```
 
-This puts `%signature%` (with name + title + company + address) on the bottom, satisfying CAN-SPAM's physical-address requirement automatically for every inbox.
+This puts `%signature%` (with name + title + company + address) on the bottom, so every inbox sends with a real mailing address in the footer.
 
 ## Health dashboard output
 

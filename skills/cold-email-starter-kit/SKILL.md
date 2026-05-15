@@ -174,7 +174,7 @@ Use these unless you have a specific reason to deviate:
 6. **Sending without SPF/DKIM/DMARC.** Zapmail sets these automatically if you connect domains through it. Verify with `dig`.
 7. **Treating a 0% reply rate in week 1 as failure.** Expect 2-5% reply rate over the full sequence; wins compound over follow-ups 2-4.
 8. **Buying a list from a random "lead seller."** Use Prospeo — verified, legal, clean data.
-9. **Emailing EU consumers.** GDPR will ruin your day. B2B is generally fine under legitimate interest. See `11-legal-compliance.md`.
+9. **Emailing EU consumers.** B2B to EU is generally fine under legitimate interest, but consumer addresses are off-limits. See `11-legal-compliance.md`.
 10. **Not handling replies fast.** Replies that sit for hours go cold. Set up notifications.
 
 ---
@@ -240,9 +240,9 @@ Every script:
 
 ## A note on ethics
 
-Cold email is legal when done right, but it's a privilege. Don't spam. Don't email consumers. Honor unsubscribes instantly. Include a real physical address. Be the kind of sender you'd want to receive email from.
+Cold email works best when it's actually useful. Skip consumer addresses, honor unsubscribes promptly, include a real address in your footer, and write something the recipient is glad they got.
 
-The best cold emails are the ones the recipient is glad they got.
+That's most of what compliance comes down to in practice.
 
 ---
 

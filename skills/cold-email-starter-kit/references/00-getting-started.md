@@ -164,7 +164,7 @@ SENDER_EMAIL_PREFIX_1=jane
 SENDER_EMAIL_PREFIX_2=janedoe
 DEFAULT_REPLY_TO_EMAIL=jane@yourmaindomain.com
 
-# ── Physical address (for email footer, CAN-SPAM compliance) ────
+# ── Physical address (for email footer — recommended) ────
 COMPANY_STREET=123 Main St
 COMPANY_CITY=Anytown
 COMPANY_STATE=CA

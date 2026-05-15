@@ -8,7 +8,7 @@
  *   <sender_company_name>
  *   <sender_physical_address>
  *
- * The physical address is REQUIRED by CAN-SPAM. Keep it in every signature.
+ * Keeping a real mailing address in the signature is recommended — it's standard practice and covers CAN-SPAM-style rules.
  *
  * Sender identity comes from .env:
  *   SENDER_FIRST_NAME

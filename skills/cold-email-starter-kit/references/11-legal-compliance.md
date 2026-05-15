@@ -1,25 +1,25 @@
 # 11 — Legal Compliance
 
-What you need to know about cold email law. Skim this before your first launch.
+A short overview of cold email law. Skim it once; no need to memorize.
 
-**Not legal advice.** This is a summary based on publicly available guidance. For your specific situation, consult a lawyer. If you're doing anything weird (healthcare, finance, EU consumers, anything above small-scale B2B), consult a lawyer before launching.
+**Not legal advice.** This is a summary based on publicly available guidance. For your specific situation, consult a lawyer — especially if you're in a regulated space (healthcare, finance, EU consumers, anything beyond small-scale B2B).
 
 ---
 
 ## CAN-SPAM (USA)
 
-The US law governing commercial email. Penalties: up to **$51,744 per violation** (yes, per email).
+The US law governing commercial email. Most cold email is straightforward to comply with.
 
-### What CAN-SPAM requires
+### What CAN-SPAM asks for
 
-Your cold email MUST have:
+A compliant cold email generally has:
 
-1. **Truthful sender identity** — the "From" name and email must match a real person/organization. No "info@" from "John Smith."
+1. **Truthful sender identity** — the "From" name and email match a real person/organization.
 2. **Non-deceptive subject line** — don't write "Re: your inquiry" if they never inquired.
 3. **Identification as an ad** — can be implicit (the email itself makes clear it's solicitation), not explicit.
-4. **Physical mailing address** — your real business address, or a PO box. Must be in every email.
+4. **Physical mailing address** — a real business address, or a PO box, in the footer.
 5. **Unsubscribe mechanism** — a clear way to opt out, honored within 10 business days.
-6. **Opt-out honored** — once someone unsubscribes, don't email them again. Ever. Applies across all your campaigns.
+6. **Opt-out honored** — once someone unsubscribes, don't email them again. Apply it across all your campaigns.
 
 ### What CAN-SPAM does NOT require
 
@@ -48,11 +48,11 @@ Both Smartlead and Instantly can inject this automatically. Use it.
 
 ## GDPR (EU)
 
-The EU data protection regulation. Much stricter than CAN-SPAM. Penalties: **up to €20M or 4% of global annual revenue.**
+The EU data protection regulation. Stricter than CAN-SPAM, especially around consumer addresses.
 
 ### The short version
 
-**B2B cold email to EU recipients IS legal** under GDPR's "legitimate interest" clause, but only if:
+**B2B cold email to EU recipients is generally legal** under GDPR's "legitimate interest" clause, provided:
 
 1. **The email is relevant to their job role.** You can email a VP of Sales about sales tools. You cannot email them about car insurance.
 2. **They can easily opt out.** Unsubscribe link in every email, honored immediately.
@@ -75,7 +75,7 @@ If you send to EU recipients at scale, include a DPO (Data Protection Officer) c
 
 ## CASL (Canada)
 
-Canadian Anti-Spam Legislation. Stricter than CAN-SPAM. Penalties: **up to CA$10M per violation.**
+Canadian Anti-Spam Legislation. Stricter than CAN-SPAM around consent.
 
 ### Key difference from CAN-SPAM
 
@@ -108,15 +108,15 @@ If you're unsure whether a Canadian recipient qualifies for implied consent, ski
 
 ## Unsubscribe requirements (summary table)
 
-| Region | Unsubscribe required? | Honor deadline | Penalty |
-|---|---|---|---|
-| USA (CAN-SPAM) | Yes | 10 business days | $51,744/violation |
-| EU (GDPR) | Yes | Immediately | €20M or 4% revenue |
-| Canada (CASL) | Yes | 10 business days | CA$10M/violation |
-| UK (PECR) | Yes | Immediately | Up to £500K |
-| Australia (Spam Act) | Yes | 5 business days | AU$2.2M/day |
+| Region | Unsubscribe required? | Honor deadline |
+|---|---|---|
+| USA (CAN-SPAM) | Yes | 10 business days |
+| EU (GDPR) | Yes | Immediately |
+| Canada (CASL) | Yes | 10 business days |
+| UK (PECR) | Yes | Immediately |
+| Australia (Spam Act) | Yes | 5 business days |
 
-**Practical rule:** honor all unsubscribes within 24 hours. That's safer than any legal minimum.
+**Practical rule:** honor all unsubscribes within 24 hours. That's safer than any legal minimum and good practice anyway.
 
 ---
 
@@ -129,22 +129,22 @@ CAN-SPAM, CASL, and some EU rules require a physical mailing address in every em
 - **A PO box** ($10-30/month from USPS)
 - **A virtual office / mailbox** — iPostal1 (~$10/mo), Earth Class Mail (~$20/mo), Anytime Mailbox (~$10/mo)
 
-Don't skip this. It's the easiest violation to catch.
+It's a small thing that quietly satisfies CAN-SPAM, CASL, and a few EU rules in one line.
 
 ---
 
-## Never do this
+## Things to avoid
 
-1. **Don't email a purchased list from a random seller.** Prospeo/Apollo/etc. are clean. "LeadMine Pro" for $99 is scraped trash that will burn your domain and get you sued.
-2. **Don't email consumer addresses in the EU.** Not debatable. GDPR will ruin your day.
-3. **Don't email minors.** Check your list filtering for .edu domains at universities that still use student emails.
-4. **Don't email government addresses (.gov, .mil).** Some agencies will forward you to their IT department with very unpleasant consequences.
-5. **Don't scrape Facebook, Instagram, personal Twitter, or TikTok for emails.** Terms of service + privacy laws.
-6. **Don't email healthcare providers about patient data.** HIPAA has its own layer.
-7. **Don't use auto-bcc to your boss** — if they're in the "To" field unexpectedly, it looks like a marketing violation.
-8. **Don't spoof From addresses.** Use the same domain you own.
-9. **Don't use AI to bypass unsubscribe.** Unsubscribe means forever.
-10. **Don't miss a physical address.** This is the #1 violation fine.
+1. **Skip purchased lists from random sellers.** Prospeo/Apollo/etc. are clean. Cheap "$99 lead packs" are scraped data that will hurt your domain reputation.
+2. **Skip consumer addresses in the EU.** B2B is fine; personal addresses aren't.
+3. **Skip student / .edu addresses for minors.** Filter universities that still use student emails.
+4. **Skip government addresses (.gov, .mil).** Some agencies escalate to IT.
+5. **Don't scrape Facebook, Instagram, personal Twitter, or TikTok for emails** — terms of service + privacy laws.
+6. **Don't email healthcare providers about patient data** — HIPAA is its own layer.
+7. **Don't auto-bcc your boss** — if they show up in "To" unexpectedly, it looks unprofessional.
+8. **Don't spoof From addresses.** Send only from domains you own.
+9. **Honor unsubscribes permanently** — once removed, stay removed across every campaign.
+10. **Include a physical address in the footer.** Easy to set once and forget.
 
 ---
 
@@ -182,10 +182,10 @@ Most "unsubscribe or I'll sue" emails are noise. But some are real. Take every o
 ## When to consult a lawyer
 
 - You're sending > 100K emails/month
-- You have EU / UK recipients
+- You have EU / UK recipients at scale
 - You're in healthcare, finance, insurance, or legal
 - You received a cease & desist
 - You're considering a purchased list
 - You're unsure about anything above
 
-Lawyers are cheap compared to CAN-SPAM fines. A one-hour compliance review before your first campaign is worth $400-800. Pay it if in doubt.
+A short compliance review before your first big campaign is usually a good investment if any of these apply.
