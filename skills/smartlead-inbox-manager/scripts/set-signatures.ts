@@ -41,7 +41,7 @@
  */
 
 import { readFileSync } from "fs";
-import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency } from "./_lib";
+import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency, fetchJson, confirmProceed } from "./_lib.js";
 
 const DEFAULT_TEMPLATE = "{from_name}\n{title}\n{company}\n{address}";
 
