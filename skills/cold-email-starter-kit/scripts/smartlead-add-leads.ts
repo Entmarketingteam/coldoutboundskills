@@ -5,6 +5,7 @@
 // .smartlead-add-leads.progress.<campaignId>.json — a rerun skips them.
 
 import fs from "node:fs";
+import path from "node:path";
 import { required, parseArgs, readCsv, writeCsv, retry, redactSecrets } from "./_lib.ts";
 
 const API = "https://server.smartlead.ai/api/v1";
