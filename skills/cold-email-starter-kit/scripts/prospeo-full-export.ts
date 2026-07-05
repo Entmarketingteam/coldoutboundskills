@@ -172,6 +172,7 @@ async function main() {
   } else {
     // Simple pagination (resumes at lastPage + 1 when checkpointed)
     const startPage = Math.max(1, lastPage + 1);
+    let pageFailed = false;
     for (let p = startPage; p <= totalPages; p++) {
       if (all.length >= limit) break;
       try {
@@ -179,8 +180,11 @@ async function main() {
         (data?.results || []).forEach((r: any) => all.push(mapResult(r)));
       } catch (e: any) {
         failures.push({ where: `page ${p}`, error: e.message });
+        pageFailed = true;
       }
-      lastPage = p;
+      // Only advance the checkpoint through contiguous successes — a resume
+      // restarts at the first failed page (dedupe handles any re-fetched overlap).
+      if (!pageFailed) lastPage = p;
       process.stdout.write(`Page ${p}/${totalPages}, collected ${all.length}...\r`);
       if (p % 10 === 0) saveProgress();
       await sleep(500);
