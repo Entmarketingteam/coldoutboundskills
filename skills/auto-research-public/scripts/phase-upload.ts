@@ -77,25 +77,55 @@ async function confirmPrompt(question: string): Promise<boolean> {
   });
 }
 
-async function slGet(path: string, params: Record<string, any> = {}): Promise<any> {
+// Bounded retry with exponential backoff on 429/5xx/network errors
+// (pattern from cold-email-starter-kit/scripts/_lib.ts retry()).
+// Never include the full URL in errors — the API key lives in the query string.
+async function slFetch(method: "GET" | "POST", path: string, params: Record<string, any>, body?: any): Promise<any> {
   const url = new URL(SL_BASE + path);
   url.searchParams.set("api_key", API_KEY!);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const resp = await fetch(url.toString());
-  if (!resp.ok) throw new Error(`GET ${path}: ${resp.status} ${await resp.text().catch(() => "")}`);
-  return resp.json();
+  const attempts = 5;
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url.toString(), {
+        method,
+        ...(body !== undefined
+          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+          : {}),
+        signal: AbortSignal.timeout(60000),
+      });
+    } catch (e: any) {
+      lastErr = new Error(`${method} ${path}: ${e?.message ?? e}`);
+      if (i < attempts - 1) {
+        console.error(`  [SL] ${method} ${path} attempt ${i + 1}/${attempts} failed — retrying`);
+        await sleep(Math.min(1000 * 2 ** i, 30000));
+      }
+      continue;
+    }
+    if (resp.status === 429 || resp.status >= 500) {
+      lastErr = new Error(`${method} ${path}: ${resp.status} ${(await resp.text().catch(() => "")).slice(0, 200)}`);
+      if (i < attempts - 1) {
+        console.error(`  [SL] ${method} ${path} got ${resp.status} — retrying`);
+        await sleep(Math.min(1000 * 2 ** i, 30000));
+      }
+      continue;
+    }
+    if (!resp.ok) throw new Error(`${method} ${path}: ${resp.status} ${await resp.text().catch(() => "")}`);
+    try {
+      return await resp.json();
+    } catch {
+      throw new Error(`${method} ${path}: response was not valid JSON`);
+    }
+  }
+  throw lastErr;
+}
+async function slGet(path: string, params: Record<string, any> = {}): Promise<any> {
+  return slFetch("GET", path, params);
 }
 async function slPost(path: string, body: any, params: Record<string, any> = {}): Promise<any> {
-  const url = new URL(SL_BASE + path);
-  url.searchParams.set("api_key", API_KEY!);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const resp = await fetch(url.toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error(`POST ${path}: ${resp.status} ${await resp.text().catch(() => "")}`);
-  return resp.json();
+  return slFetch("POST", path, params, body);
 }
 
 async function selectInboxes(
