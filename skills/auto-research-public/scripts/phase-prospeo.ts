@@ -86,30 +86,42 @@ async function main() {
     process.exit(1);
   }
   let filters: any;
+  let filtersHash = "";
   try {
-    filters = JSON.parse(readFileSync(filtersFile, "utf8"));
+    const raw = readFileSync(filtersFile, "utf8");
+    filtersHash = createHash("sha256").update(raw).digest("hex").slice(0, 16);
+    filters = JSON.parse(raw);
   } catch (e: any) {
     console.error(`Cannot read filters file ${filtersFile}: ${e?.message ?? e}`);
     process.exit(1);
   }
 
-  // Resume from a partial checkpoint if a previous run crashed mid-pagination
+  // Resume from a partial checkpoint if a previous run crashed mid-pagination.
+  // Provenance-tagged (script + filters hash) so a checkpoint left by phase-apollo.ts
+  // (same --out default) or a run with different filters is never silently resumed.
+  const CHECKPOINT_SOURCE = "phase-prospeo";
   const partialFile = `${out}.partial.json`;
   let all: Lead[] = [];
   let startPage = 1;
   if (existsSync(partialFile)) {
     try {
       const partial = JSON.parse(readFileSync(partialFile, "utf8"));
-      all = partial.leads ?? [];
-      startPage = (partial.lastPage ?? 0) + 1;
-      console.error(`[Prospeo] Resuming from ${partialFile}: ${all.length} leads, page ${startPage}`);
+      if (partial.source !== CHECKPOINT_SOURCE || partial.filtersHash !== filtersHash) {
+        console.error(
+          `[Prospeo] Ignoring checkpoint ${partialFile} (source=${partial.source ?? "unknown"}, filters mismatch) — starting fresh`
+        );
+      } else {
+        all = partial.leads ?? [];
+        startPage = (partial.lastPage ?? 0) + 1;
+        console.error(`[Prospeo] Resuming from ${partialFile}: ${all.length} leads, page ${startPage}`);
+      }
     } catch {
       console.error(`[Prospeo] Ignoring unreadable checkpoint ${partialFile}`);
     }
   }
   const writePartial = (lastPage: number) => {
     mkdirSync(dirname(out), { recursive: true });
-    writeFileSync(partialFile, JSON.stringify({ lastPage, leads: all }));
+    writeFileSync(partialFile, JSON.stringify({ source: CHECKPOINT_SOURCE, filtersHash, lastPage, leads: all }));
   };
 
   console.error(`[Prospeo] Searching up to ${maxPages} pages / ${maxLeads} leads...`);
