@@ -313,4 +313,9 @@ function main() {
   console.log(report);
 }
 
-main();
+try {
+  main();
+} catch (e) {
+  console.error(String(e));
+  process.exit(1);
+}
