@@ -167,7 +167,7 @@ This script:
 5. Sets schedule (Mon-Fri 8am-5pm EST) and settings (tracking off, stop on reply)
 6. Activates the campaign
 
-Outputs: `{ campaignId, inboxCount, leadsUploaded }` to stdout.
+Outputs: `{ campaignId, inboxCount, leadsUploaded, failedBatches }` to stdout. If any lead batches failed to upload, `failedBatches` lists them and the script exits nonzero (the campaign still exists with the leads that did upload).
 
 ### Phase 8: Save experiment state (local JSON)
 
