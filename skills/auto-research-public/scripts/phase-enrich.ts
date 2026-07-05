@@ -318,14 +318,15 @@ async function main() {
       2
     )
   );
-  rmSync(progressFile, { force: true });
   console.error(`\nWrote ${out} — ${finalWithEmail.length} leads with valid email`);
   if (enrichFailures.length && enrichFailures.length >= Math.ceil(enrichTodo.length / 2)) {
+    // keep the progress file so a rerun only retries the failed leads
     console.error(
       `[Enrich] ${enrichFailures.length}/${enrichTodo.length} enrich calls errored (not misses) — failing so the run is retried`
     );
     process.exit(1);
   }
+  rmSync(progressFile, { force: true });
 }
 
 main().catch((e) => {
