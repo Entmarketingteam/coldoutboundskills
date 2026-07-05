@@ -31,11 +31,39 @@ function parseArgs() {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
     return arg ? arg.split("=").slice(1).join("=") : undefined;
   };
+  const enrichConcurrency = Number(get("--concurrency") ?? 5);
+  if (!Number.isInteger(enrichConcurrency) || enrichConcurrency < 1) {
+    console.error("--concurrency must be a positive integer");
+    process.exit(1);
+  }
   return {
     leadsFile: get("--leads-file"),
     out: get("--out") ?? "/tmp/auto/enriched.json",
-    enrichConcurrency: Number(get("--concurrency") ?? 5),
+    enrichConcurrency,
   };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Bounded retry with exponential backoff on 429/5xx/network errors
+// (pattern from cold-email-starter-kit/scripts/_lib.ts retry()).
+// NOTE: never include the request URL in errors/logs — MV puts the API key in the query string.
+async function fetchWithRetry(url: string, init: RequestInit, label: string, timeoutMs = 30000, attempts = 5): Promise<Response> {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const resp = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      if (resp.status === 429 || resp.status >= 500) {
+        lastErr = new Error(`${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`);
+      } else {
+        return resp;
+      }
+    } catch (e: any) {
+      lastErr = new Error(`${label}: ${e?.message ?? e}`);
+    }
+    if (i < attempts - 1) await sleep(Math.min(1000 * 2 ** i, 30000));
+  }
+  throw new Error(`${label} failed after ${attempts} attempts: ${lastErr?.message ?? lastErr}`);
 }
 
 async function enrichEmail(lead: any): Promise<string> {
