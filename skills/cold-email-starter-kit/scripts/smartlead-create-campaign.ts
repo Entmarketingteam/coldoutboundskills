@@ -13,12 +13,14 @@ const STATE_FILE = ".smartlead-campaign.json";
 
 // fetchJson retries 429/5xx with backoff, fails fast on other 4xx (with body detail),
 // guards JSON parsing, and times out. Error messages never include the URL (api_key is a query param).
-async function smartleadPost(path: string, body: any, key: string): Promise<any> {
+async function smartleadPost(path: string, body: any, key: string, opts: { attempts?: number } = {}): Promise<any> {
+  // Pass opts.attempts=1 for non-idempotent calls (campaign create) so a post-commit
+  // timeout/5xx isn't retried into a duplicate.
   return fetchJson(`${API}${path}?api_key=${key}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, opts);
 }
 
 async function smartleadGet(path: string, key: string): Promise<any> {
