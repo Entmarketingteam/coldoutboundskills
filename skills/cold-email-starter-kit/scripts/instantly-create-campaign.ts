@@ -43,11 +43,16 @@ async function main() {
   const sequenceFile = (flags.sequence as string) || "sequence.json";
   const leadsFile = (flags.leads as string) || "leads.csv";
   const autoActivate = !!flags["auto-activate"];
-  const resumeCampaignId = flags["campaign-id"] as string | undefined;
+  const resumeCampaignId = flags["campaign-id"];
 
   const key = required("INSTANTLY_API_KEY");
 
   // 0. Validate inputs UP FRONT, before any API call or spend.
+  // A bare `--campaign-id` (no value) parses as boolean true — reject it.
+  if (resumeCampaignId !== undefined && typeof resumeCampaignId !== "string") {
+    console.error("Error: --campaign-id requires a value (the campaign id to resume), e.g. --campaign-id abc123.");
+    process.exit(1);
+  }
   if (!fs.existsSync(sequenceFile)) {
     console.error(`Error: sequence file not found: ${sequenceFile}. Pass --sequence <file> (a JSON array of sequence steps).`);
     process.exit(1);
