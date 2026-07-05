@@ -248,6 +248,10 @@ export function createQueue(concurrency: number) {
 // Terminal
 // ─────────────────────────────────────────────────────────
 export async function confirm(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    console.error("Non-interactive session: re-run with --yes to proceed.");
+    return false;
+  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise(resolve => {
     rl.question(`${question} `, answer => {
