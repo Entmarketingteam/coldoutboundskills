@@ -64,22 +64,30 @@ function parseArgs() {
   return { campaignId, senders, out, testName, yes, resumeTestId };
 }
 
-async function fetchJson(url: string, init?: RequestInit): Promise<any> {
+// maxAttempts=1 disables retries — required for non-idempotent calls (e.g. the
+// spam-test create POST) where a retry after a timeout/5xx could double-spend.
+async function fetchJson(url: string, init?: RequestInit, maxAttempts = 5): Promise<any> {
   let lastErr = "";
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const lastAttempt = attempt === maxAttempts - 1;
     let resp: Response;
     try {
       resp = await fetch(url, { ...init, signal: AbortSignal.timeout(60000) });
     } catch (err) {
       lastErr = `network error: ${String(err).slice(0, 150)}`;
-      console.error(`  [${lastErr}] retry ${attempt + 1}/5`);
+      if (lastAttempt) break;
+      console.error(`  [${lastErr}] retry ${attempt + 1}/${maxAttempts}`);
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       continue;
     }
     if (resp.status === 429 || resp.status >= 500) {
+      if (lastAttempt) {
+        const body = await resp.text().catch(() => "");
+        throw new Error(`HTTP ${resp.status}: ${body.slice(0, 300)}`);
+      }
       lastErr = `HTTP ${resp.status}`;
       const wait = 1000 * 2 ** attempt;
-      console.error(`  [${resp.status}] retry ${attempt + 1}/5 in ${wait}ms`);
+      console.error(`  [${resp.status}] retry ${attempt + 1}/${maxAttempts} in ${wait}ms`);
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
@@ -91,7 +99,8 @@ async function fetchJson(url: string, init?: RequestInit): Promise<any> {
       return await resp.json();
     } catch (err) {
       lastErr = `JSON parse error: ${String(err).slice(0, 150)}`;
-      console.error(`  [${lastErr}] retry ${attempt + 1}/5`);
+      if (lastAttempt) break;
+      console.error(`  [${lastErr}] retry ${attempt + 1}/${maxAttempts}`);
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       continue;
     }
