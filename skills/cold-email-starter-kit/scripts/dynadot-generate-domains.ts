@@ -4,7 +4,7 @@
 //
 // Outputs: generated-domains.csv in the skill root with columns: domain, available, price
 
-import { env, required, parseArgs, writeCsv, sleep, retry } from "./_lib.ts";
+import { env, required, parseArgs, writeCsv, sleep, fetchJson, numFlag } from "./_lib.ts";
 
 const PREFIXES = [
   "go", "get", "try", "my", "the", "hey", "use", "run", "hello",
