@@ -162,10 +162,63 @@ export async function retry<T>(fn: () => Promise<T>, opts: { attempts?: number; 
     try { return await fn(); } catch (e: any) {
       lastErr = e;
       onAttemptError?.(e, i);
-      await sleep(Math.min(baseDelayMs * Math.pow(2, i), 30000));
+      // Fail fast on errors explicitly marked non-retryable (e.g. 4xx auth/validation),
+      // and don't waste a backoff sleep after the final attempt.
+      if (e?.retryable === false || i === attempts - 1) break;
+      await sleep(Math.min(baseDelayMs * Math.pow(2, i) + Math.random() * 250, 30000));
     }
   }
   throw lastErr;
+}
+
+// ─────────────────────────────────────────────────────────
+// HTTP (timeout + retry + error-body detail, secrets redacted)
+// ─────────────────────────────────────────────────────────
+
+// Replace any configured secret values (env vars named *KEY/TOKEN/SECRET/PASSWORD*)
+// with *** so error output never leaks credentials.
+export function redactSecrets(s: string): string {
+  let out = s;
+  for (const [k, v] of Object.entries(env)) {
+    if (!v || v.length < 8) continue;
+    if (!/KEY|TOKEN|SECRET|PASSWORD/i.test(k)) continue;
+    out = out.split(v).join("***");
+  }
+  return out;
+}
+
+// fetch + JSON parse with:
+// - AbortSignal timeout (default 30s)
+// - bounded retry with exponential backoff on 429/5xx and network/timeout errors
+// - fail-fast on other 4xx (marked retryable: false)
+// - error messages include HTTP status + redacted body snippet, never the full URL
+export async function fetchJson<T = any>(url: string, init: RequestInit = {}, opts: { timeoutMs?: number; attempts?: number; baseDelayMs?: number } = {}): Promise<T> {
+  const { timeoutMs = 30000, attempts, baseDelayMs } = opts;
+  const host = new URL(url).host;
+  return retry(async () => {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (e: any) {
+      // network error / timeout — retryable
+      throw new Error(`Network error calling ${host}: ${redactSecrets(String(e?.message || e))}`);
+    }
+    const text = await res.text();
+    if (!res.ok) {
+      const err: any = new Error(`HTTP ${res.status} from ${host}: ${redactSecrets(text.slice(0, 300))}`);
+      err.status = res.status;
+      err.retryable = res.status === 429 || res.status >= 500;
+      throw err;
+    }
+    if (text.trim() === "") return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      const err: any = new Error(`Invalid JSON from ${host} (HTTP ${res.status}): ${redactSecrets(text.slice(0, 200))}`);
+      err.retryable = false;
+      throw err;
+    }
+  }, { attempts, baseDelayMs });
 }
 
 // simple p-queue replacement (concurrency limiter)
