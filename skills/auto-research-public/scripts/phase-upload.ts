@@ -98,19 +98,26 @@ async function slFetch(method: "GET" | "POST", path: string, params: Record<stri
       });
     } catch (e: any) {
       lastErr = new Error(`${method} ${path}: ${e?.message ?? e}`);
-      if (i < attempts - 1) {
+      // POST is non-idempotent: a network/timeout error may hit after a server-side
+      // commit, so retrying could duplicate the resource. Only GET retries here.
+      if (method === "GET" && i < attempts - 1) {
         console.error(`  [SL] ${method} ${path} attempt ${i + 1}/${attempts} failed — retrying`);
         await sleep(Math.min(1000 * 2 ** i, 30000));
+        continue;
       }
-      continue;
+      throw lastErr;
     }
     if (resp.status === 429 || resp.status >= 500) {
       lastErr = new Error(`${method} ${path}: ${resp.status} ${(await resp.text().catch(() => "")).slice(0, 200)}`);
-      if (i < attempts - 1) {
+      // 429 is safe to retry for any method (nothing committed). A 5xx on a POST may
+      // follow a server-side commit, so only GET retries on 5xx.
+      const retryable = resp.status === 429 || method === "GET";
+      if (retryable && i < attempts - 1) {
         console.error(`  [SL] ${method} ${path} got ${resp.status} — retrying`);
         await sleep(Math.min(1000 * 2 ** i, 30000));
+        continue;
       }
-      continue;
+      throw lastErr;
     }
     if (!resp.ok) throw new Error(`${method} ${path}: ${resp.status} ${await resp.text().catch(() => "")}`);
     try {
