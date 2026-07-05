@@ -530,9 +530,12 @@ async function main() {
     saveState();
   }
 
-  // 6. Upload leads in batches
-  let uploaded = 0;
-  for (let i = 0; i < leads.length; i += LEADS_BATCH) {
+  // 6. Upload leads in batches (resumes at state.leadsUploaded)
+  let uploaded = state.leadsUploaded;
+  if (uploaded > 0) console.error(`  Resuming lead upload at offset ${uploaded}/${leads.length}`);
+  const failedBatches: string[] = [];
+  let firstFailedAt = -1;
+  for (let i = state.leadsUploaded; i < leads.length; i += LEADS_BATCH) {
     const batch = leads.slice(i, i + LEADS_BATCH).map((l) => {
       const custom_fields: Record<string, string> = {};
       for (const h of headers) {
@@ -551,33 +554,61 @@ async function main() {
       uploaded += batch.length;
       process.stdout.write(`  ${uploaded}/${leads.length} leads uploaded\r`);
     } catch (err: any) {
+      failedBatches.push(`${i}-${i + LEADS_BATCH}`);
+      if (firstFailedAt === -1) firstFailedAt = i;
       console.error(`\n  ⚠ batch ${i}-${i + LEADS_BATCH} failed: ${err.message?.slice(0, 200)}`);
     }
+    state.leadsUploaded = i + batch.length;
+    saveState();
     await new Promise((r) => setTimeout(r, 300));
   }
   console.error(`\n  ✓ ${uploaded} leads uploaded`);
 
   // 7. Settings (track off, stop on reply)
-  await slPost(`/campaigns/${campaignId}/settings`, {
-    track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
-    stop_lead_settings: "REPLY_TO_AN_EMAIL",
-    send_as_plain_text: false,
-    enable_ai_esp_matching: false,
-  });
-  console.error(`  ✓ Settings saved (tracking off, stop on reply)`);
+  if (state.settingsDone) {
+    console.error(`  ✓ Settings already saved (resumed)`);
+  } else {
+    await slPost(`/campaigns/${campaignId}/settings`, {
+      track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
+      stop_lead_settings: "REPLY_TO_AN_EMAIL",
+      send_as_plain_text: false,
+      enable_ai_esp_matching: false,
+    });
+    console.error(`  ✓ Settings saved (tracking off, stop on reply)`);
+    state.settingsDone = true;
+    saveState();
+  }
 
   // 8. Schedule
-  await slPost(`/campaigns/${campaignId}/schedule`, {
-    timezone: v.schedule.timezone,
-    days_of_the_week: v.schedule.days,
-    start_hour: v.schedule.start_hour,
-    end_hour: v.schedule.end_hour,
-    min_time_btw_emails: v.schedule.min_time_btw_emails,
-    max_new_leads_per_day: v.schedule.max_leads_per_day,
-  });
-  console.error(`  ✓ Schedule set (${v.schedule.timezone}, ${v.schedule.start_hour}-${v.schedule.end_hour})`);
+  if (state.scheduleDone) {
+    console.error(`  ✓ Schedule already set (resumed)`);
+  } else {
+    await slPost(`/campaigns/${campaignId}/schedule`, {
+      timezone: v.schedule.timezone,
+      days_of_the_week: v.schedule.days,
+      start_hour: v.schedule.start_hour,
+      end_hour: v.schedule.end_hour,
+      min_time_btw_emails: v.schedule.min_time_btw_emails,
+      max_new_leads_per_day: v.schedule.max_leads_per_day,
+    });
+    console.error(`  ✓ Schedule set (${v.schedule.timezone}, ${v.schedule.start_hour}-${v.schedule.end_hour})`);
+    state.scheduleDone = true;
+    saveState();
+  }
 
   // 9. DRAFT only. Do not activate.
+  if (failedBatches.length) {
+    // Point the checkpoint at the first failed batch so a rerun retries it
+    // (Smartlead ignores leads already present in the campaign).
+    state.leadsUploaded = firstFailedAt;
+    saveState();
+    console.error(`\n⚠ ${leads.length - uploaded} leads failed in batches: ${failedBatches.join(", ")}`);
+    console.error(`  Re-run the same command to retry (state saved to ${statePath}).`);
+    process.exitCode = 1;
+  } else {
+    try { unlinkSync(statePath); } catch { /* already gone */ }
+  }
+
   console.log(``);
   console.log(`✓ Campaign #${campaignId} created in DRAFT`);
   console.log(``);
