@@ -141,6 +141,7 @@ async function main() {
     for (const state of US_STATES) {
       if (all.length >= limit) break;
       if (doneStates.has(state)) continue;
+      let stateFailed = false;
       try {
         const stateFilters = JSON.parse(JSON.stringify(baseFilters));
         stateFilters.person_location_search.include = [`${state}, United States #US`];
@@ -154,15 +155,18 @@ async function main() {
             (data?.results || []).forEach((r: any) => all.push(mapResult(r)));
           } catch (e: any) {
             failures.push({ where: `${state} page ${p}`, error: e.message });
+            stateFailed = true;
           }
           await sleep(500);
         }
         console.log(`  ${state}: ${sTotal} available, collected ${all.length} total so far`);
       } catch (e: any) {
         failures.push({ where: `${state} (first page)`, error: e.message });
-        console.error(`  ${state}: failed (${e.message}), skipping.`);
+        console.error(`  ${state}: failed (${e.message}), will retry on resume.`);
+        stateFailed = true;
       }
-      doneStates.add(state);
+      // Only mark the state done if every page succeeded — a resume retries failed states.
+      if (!stateFailed) doneStates.add(state);
       saveProgress();
     }
   } else {
