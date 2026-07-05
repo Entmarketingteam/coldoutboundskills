@@ -172,8 +172,12 @@ async function main() {
   try {
     const countUrl = `${DISCOLIKE_BASE}/count?${buildParams(args, 0)}`;
     const { count } = await fetchJson(countUrl);
-    universe = Number(count);
-    console.error(`[DiscoLike] Universe size: ${universe.toLocaleString()}`);
+    universe = Number.isFinite(Number(count)) ? Number(count) : null;
+    if (universe === null) {
+      console.error(`[DiscoLike] Count check returned no numeric count, proceeding without universe estimate`);
+    } else {
+      console.error(`[DiscoLike] Universe size: ${universe.toLocaleString()}`);
+    }
   } catch (err) {
     console.error(`[DiscoLike] Count check failed, proceeding anyway: ${String(err).slice(0, 100)}`);
   }
