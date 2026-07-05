@@ -24,12 +24,44 @@ function parseArgs() {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
     return arg ? arg.split("=").slice(1).join("=") : undefined;
   };
+  const maxLeads = Number(get("--max-leads") ?? 1000);
+  const maxPages = Number(get("--max-pages") ?? 40);
+  if (!Number.isInteger(maxLeads) || maxLeads < 1 || !Number.isInteger(maxPages) || maxPages < 1) {
+    console.error("--max-leads and --max-pages must be positive integers");
+    process.exit(1);
+  }
   return {
     filtersFile: get("--filters-file"),
-    maxLeads: Number(get("--max-leads") ?? 1000),
-    maxPages: Number(get("--max-pages") ?? 40),
+    maxLeads,
+    maxPages,
     out: get("--out") ?? "/tmp/auto/leads.json",
   };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Bounded retry with exponential backoff on 429/5xx/network errors
+// (pattern from cold-email-starter-kit/scripts/_lib.ts retry()).
+async function fetchWithRetry(url: string, init: RequestInit, label: string, attempts = 5): Promise<Response> {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const resp = await fetch(url, { ...init, signal: AbortSignal.timeout(30000) });
+      if (resp.status === 429 || resp.status >= 500) {
+        lastErr = new Error(`${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`);
+      } else {
+        return resp;
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+    if (i < attempts - 1) {
+      const delay = Math.min(1000 * 2 ** i, 30000);
+      console.error(`[Prospeo] ${label} attempt ${i + 1}/${attempts} failed (${lastErr?.message ?? lastErr}) — retrying in ${delay / 1000}s`);
+      await sleep(delay);
+    }
+  }
+  throw new Error(`[Prospeo] ${label} failed after ${attempts} attempts: ${lastErr?.message ?? lastErr}`);
 }
 
 interface Lead {
