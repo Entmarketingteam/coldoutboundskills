@@ -12,9 +12,11 @@
  *
  * Optional:
  *   --client-id=X    Smartlead sub-client ID (if your account uses sub-clients)
+ *   --yes            Skip the interactive confirmation before creating the campaign
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from "fs";
+import { createInterface } from "readline/promises";
 
 const API = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
