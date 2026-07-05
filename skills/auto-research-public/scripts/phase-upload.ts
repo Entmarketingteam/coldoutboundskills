@@ -17,8 +17,9 @@
  *     --activate
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "fs";
 import { dirname } from "path";
+import readline from "readline";
 
 const SL_BASE = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
