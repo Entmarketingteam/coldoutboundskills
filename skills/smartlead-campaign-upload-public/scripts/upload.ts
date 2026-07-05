@@ -411,14 +411,62 @@ async function main() {
   const variantCount = v.sequences.reduce((s: number, seq: any) => s + seq.variants.length, 0);
   console.error(`  ${v.sequences.length} sequences, ${variantCount} total variants`);
 
-  // 3. Create campaign
-  console.error(`Creating Smartlead campaign "${v.name}"...`);
-  const createBody: any = { name: v.name };
-  if (args.clientId) createBody.client_id = Number(args.clientId);
-  const created = await slPost("/campaigns/create", createBody);
-  const campaignId = created.id ?? created.campaign_id;
-  if (!campaignId) throw new Error(`Campaign create failed: ${JSON.stringify(created)}`);
-  console.error(`  ✓ Campaign #${campaignId}`);
+  // Resume state from a previous interrupted run of the same campaign
+  const statePath = `${args.variants}.upload-state.json`;
+  let state: UploadState | null = null;
+  if (existsSync(statePath)) {
+    try {
+      const saved = JSON.parse(readFileSync(statePath, "utf8"));
+      if (saved && saved.name === v.name && saved.campaignId) state = saved;
+      else console.error(`  ⚠ Ignoring ${statePath} (belongs to a different campaign name)`);
+    } catch {
+      console.error(`  ⚠ Could not parse ${statePath}; starting fresh`);
+    }
+  }
+  const saveState = () => writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+  // 3. Create campaign (spend-class operation — gated unless --yes or non-TTY)
+  let campaignId: number | string;
+  if (state) {
+    campaignId = state.campaignId;
+    console.error(`Resuming previous upload from ${statePath}`);
+    console.error(`  ✓ Reusing campaign #${campaignId}`);
+  } else {
+    console.error(`\nAbout to create Smartlead campaign:`);
+    console.error(`  name:      ${v.name}`);
+    console.error(`  leads:     ${leads.length}`);
+    console.error(`  variants:  ${variantCount} across ${v.sequences.length} steps`);
+    console.error(`  inboxes:   ${v.inbox_selection.count} (tag=${v.inbox_selection.tag})`);
+    console.error(`  schedule:  ${v.schedule.timezone} ${v.schedule.start_hour}-${v.schedule.end_hour}, days=${JSON.stringify(v.schedule.days)}`);
+    if (args.yes || !process.stdin.isTTY) {
+      console.error(`  (confirmation skipped: ${args.yes ? "--yes passed" : "non-interactive stdin"})`);
+    } else {
+      const rl = createInterface({ input: process.stdin, output: process.stderr });
+      const answer = (await rl.question("Proceed? [y/N] ")).trim().toLowerCase();
+      rl.close();
+      if (answer !== "y" && answer !== "yes") {
+        console.error("Aborted.");
+        process.exit(1);
+      }
+    }
+    console.error(`Creating Smartlead campaign "${v.name}"...`);
+    const createBody: any = { name: v.name };
+    if (args.clientId) createBody.client_id = Number(args.clientId);
+    const created = await slPost("/campaigns/create", createBody);
+    campaignId = created.id ?? created.campaign_id;
+    if (!campaignId) throw new Error(`Campaign create failed: ${JSON.stringify(created)}`);
+    console.error(`  ✓ Campaign #${campaignId}`);
+    state = {
+      name: v.name,
+      campaignId,
+      sequencesDone: false,
+      inboxesDone: false,
+      leadsUploaded: 0,
+      settingsDone: false,
+      scheduleDone: false,
+    };
+    saveState();
+  }
 
   // 4. Save sequences
   const slSequences = v.sequences.map((seq: any) => ({
