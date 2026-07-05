@@ -329,7 +329,21 @@ async function listInboxes(): Promise<any[]> {
 function validateVariants(v: any): void {
   if (!v || typeof v !== "object") throw new Error("variants.yaml must be a map at the top level");
   if (!v.name) throw new Error("variants.yaml: `name` is required");
-  if (!v.schedule) throw new Error("variants.yaml: `schedule` is required");
+  if (!v.schedule || typeof v.schedule !== "object") throw new Error("variants.yaml: `schedule` is required");
+  // Validate every schedule field consumed in main() up front — a bad schedule
+  // otherwise only fails at step 8, after the campaign + leads already exist.
+  if (typeof v.schedule.timezone !== "string" || !v.schedule.timezone)
+    throw new Error("variants.yaml: `schedule.timezone` must be a string (e.g. \"America/New_York\")");
+  if (!Array.isArray(v.schedule.days) || !v.schedule.days.length)
+    throw new Error("variants.yaml: `schedule.days` must be a non-empty array (e.g. [1,2,3,4,5])");
+  for (const key of ["start_hour", "end_hour"]) {
+    if (typeof v.schedule[key] !== "string" || !v.schedule[key])
+      throw new Error(`variants.yaml: \`schedule.${key}\` must be a string like "09:00"`);
+  }
+  for (const key of ["min_time_btw_emails", "max_leads_per_day"]) {
+    if (!Number.isFinite(v.schedule[key]))
+      throw new Error(`variants.yaml: \`schedule.${key}\` must be a number`);
+  }
   if (!v.inbox_selection?.tag) throw new Error("variants.yaml: `inbox_selection.tag` is required");
   if (!Number.isFinite(v.inbox_selection?.count)) throw new Error("variants.yaml: `inbox_selection.count` must be a number");
   if (!Array.isArray(v.sequences) || !v.sequences.length) throw new Error("variants.yaml: `sequences` must be a non-empty array");
