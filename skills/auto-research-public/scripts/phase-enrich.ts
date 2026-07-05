@@ -306,9 +306,11 @@ async function main() {
           already_had_email: alreadyHad,
           enrich_hits: enrichHits,
           enrich_misses: enrichMisses,
+          enrich_failures: enrichFailures.length,
           description_hits: descHits,
           mv_ok: mvOk,
           mv_invalid: mvInvalid,
+          mv_skip: mvSkip,
           final_with_email: finalWithEmail.length,
         },
       },
@@ -316,7 +318,14 @@ async function main() {
       2
     )
   );
+  rmSync(progressFile, { force: true });
   console.error(`\nWrote ${out} — ${finalWithEmail.length} leads with valid email`);
+  if (enrichFailures.length && enrichFailures.length >= Math.ceil(enrichTodo.length / 2)) {
+    console.error(
+      `[Enrich] ${enrichFailures.length}/${enrichTodo.length} enrich calls errored (not misses) — failing so the run is retried`
+    );
+    process.exit(1);
+  }
 }
 
 main().catch((e) => {
