@@ -35,18 +35,46 @@ function parseArgs() {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
     return arg ? arg.split("=").slice(1).join("=") : undefined;
   };
+  const inboxCount = Number(get("--inbox-count") ?? 10);
+  if (!Number.isInteger(inboxCount) || inboxCount < 1) {
+    console.error("--inbox-count must be a positive integer");
+    process.exit(1);
+  }
+  const clientId = get("--client-id");
+  if (clientId !== undefined && !Number.isInteger(Number(clientId))) {
+    console.error("--client-id must be an integer");
+    process.exit(1);
+  }
+  const inboxIds = get("--inbox-ids")?.split(",").map(Number); // explicit inbox IDs
+  if (inboxIds?.some((n) => !Number.isInteger(n))) {
+    console.error("--inbox-ids must be a comma-separated list of integers");
+    process.exit(1);
+  }
   return {
     leadsFile: get("--leads-file"),
     variantsFile: get("--variants-file"),
     domain: get("--domain"),
     inboxTag: get("--inboxes-tag") ?? "active",
     inboxDomain: get("--inbox-domain"), // fallback: filter by email domain substring
-    inboxIds: get("--inbox-ids")?.split(",").map(Number), // explicit inbox IDs
-    inboxCount: Number(get("--inbox-count") ?? 10),
-    clientId: get("--client-id"),
+    inboxIds,
+    inboxCount,
+    clientId,
     experimentLog: get("--experiment-log"),
     activate: args.includes("--activate"),
+    yes: args.includes("--yes"),
   };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function confirmPrompt(question: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question(`${question} `, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase().startsWith("y"));
+    });
+  });
 }
 
 async function slGet(path: string, params: Record<string, any> = {}): Promise<any> {
