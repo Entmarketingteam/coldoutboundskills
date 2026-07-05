@@ -2,6 +2,8 @@
  * Shared utilities for smartlead-inbox-manager scripts.
  */
 
+import { readFileSync, existsSync } from "fs";
+
 export const API_BASE = "https://server.smartlead.ai/api/v1";
 export const API_KEY = process.env.SMARTLEAD_API_KEY;
 
