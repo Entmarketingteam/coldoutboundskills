@@ -69,7 +69,7 @@ async function main() {
       });
       added += batch.length;
       done.add(i);
-      fs.writeFileSync(progressFile, JSON.stringify([...done]));
+      saveProgress();
     } catch (e: any) {
       // Bad auth or bad campaign id will fail every batch — abort immediately.
       if (e?.status === 401 || e?.status === 404) {
