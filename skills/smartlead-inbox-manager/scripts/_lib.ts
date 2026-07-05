@@ -142,14 +142,25 @@ export async function selectInboxes(args: string[]): Promise<InboxAccount[]> {
 
   const csv = parseFlag(args, "--ids-from-csv");
   if (csv) {
-    const { readFileSync } = require("fs");
+    if (!existsSync(csv)) {
+      console.error(`CSV not found: ${csv}`);
+      process.exit(1);
+    }
+    // Strip surrounding double quotes so CSVs written by list-health --out round-trip.
+    const unq = (s: string) => s.trim().replace(/^"|"$/g, "");
     const text = readFileSync(csv, "utf8");
-    const lines = text.trim().split("\n");
-    const header = lines[0].split(",");
+    const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
+    const header = lines[0].split(",").map(unq);
     const idCol = header.indexOf("id");
-    if (idCol < 0) throw new Error(`CSV ${csv} missing 'id' column`);
-    const ids = new Set(lines.slice(1).map((l) => Number(l.split(",")[idCol].trim())));
-    return all.filter((a) => ids.has(a.id));
+    if (idCol < 0) {
+      console.error(`CSV ${csv} missing 'id' column`);
+      process.exit(1);
+    }
+    const csvIds = parseIds(
+      lines.slice(1).map((l) => unq(l.split(",")[idCol] ?? "")),
+      `CSV ${csv}`
+    );
+    return all.filter((a) => csvIds.has(a.id));
   }
 
   console.error(
