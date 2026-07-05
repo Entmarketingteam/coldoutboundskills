@@ -94,6 +94,11 @@ async function main() {
     }
   }
 
+  if (!pages.length) {
+    console.error(`\nNo pages scraped for ${clean} (blocked or unreachable)`);
+    process.exit(1);
+  }
+
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify({ domain: clean, pages }, null, 2));
   console.error(`\nWrote ${out} — ${pages.length} pages`);
