@@ -109,6 +109,39 @@ export async function listAllInboxes(): Promise<InboxAccount[]> {
   return all;
 }
 
+/** Parse id tokens; exit 1 listing any non-numeric values instead of silently matching nothing. */
+function parseIds(tokens: string[], source: string): Set<number> {
+  const ids = new Set<number>();
+  const bad: string[] = [];
+  for (const raw of tokens) {
+    const t = raw.trim();
+    const n = Number(t);
+    if (!t || !Number.isFinite(n)) bad.push(raw);
+    else ids.add(n);
+  }
+  if (bad.length) {
+    console.error(`Non-numeric id value(s) in ${source}: ${bad.join(", ")}`);
+    process.exit(1);
+  }
+  return ids;
+}
+
+/**
+ * Confirmation gate for bulk mutations.
+ * --yes skips entirely; interactive TTY gets a countdown; non-TTY without --yes exits 1.
+ */
+export async function confirmProceed(args: string[], summary: string, seconds = 3): Promise<void> {
+  if (hasFlag(args, "--yes")) return;
+  if (!process.stdout.isTTY) {
+    console.error(
+      `Refusing to proceed without --yes in non-interactive mode: ${summary}. Re-run with --yes.`
+    );
+    process.exit(1);
+  }
+  console.error(`${summary} — proceeding in ${seconds}s... (Ctrl+C to abort, or pass --yes to skip)`);
+  await new Promise((r) => setTimeout(r, seconds * 1000));
+}
+
 /**
  * Given selector args, return the filtered list of inboxes.
  *
