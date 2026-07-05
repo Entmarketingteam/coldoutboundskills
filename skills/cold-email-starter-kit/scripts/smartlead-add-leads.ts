@@ -40,9 +40,10 @@ async function postWithRetry(url: string, body: any): Promise<Response> {
 
 async function main() {
   const { flags } = parseArgs();
-  const campaignId = flags["campaign-id"] as string;
+  const campaignId = flags["campaign-id"];
   const leadsFile = (flags.leads as string) || "leads.csv";
-  if (!campaignId || campaignId === "true") { console.error("Usage: --campaign-id <id> --leads leads.csv"); process.exit(1); }
+  // A bare `--campaign-id` (no value) parses as boolean true — reject anything non-string.
+  if (typeof campaignId !== "string") { console.error("Usage: --campaign-id <id> --leads leads.csv"); process.exit(1); }
 
   const key = required("SMARTLEAD_API_KEY");
   const leads = readCsv(leadsFile);
