@@ -73,7 +73,7 @@ async function main() {
 
   let campaignId: string;
 
-  if (resumeCampaignId && resumeCampaignId !== "true") {
+  if (typeof resumeCampaignId === "string") {
     campaignId = resumeCampaignId;
     console.log(`Resuming with existing campaign ${campaignId} — skipping creation.`);
   } else {
