@@ -22,12 +22,24 @@ async function main() {
   console.log(`Adding ${leads.length} leads to Instantly campaign ${campaignId}...`);
 
   // Checkpoint: batch start-indexes already uploaded on a previous run.
+  // Tied to the leads file identity (path + row count) so a rerun against a
+  // different file (e.g. failed-leads.csv) never skips the wrong rows.
   const progressFile = `.instantly-add-leads.progress.${campaignId}.json`;
+  const leadsFilePath = path.resolve(leadsFile);
   let done = new Set<number>();
   if (fs.existsSync(progressFile)) {
-    try { done = new Set(JSON.parse(fs.readFileSync(progressFile, "utf8"))); } catch { done = new Set(); }
+    try {
+      const saved = JSON.parse(fs.readFileSync(progressFile, "utf8"));
+      if (saved?.file === leadsFilePath && saved?.rows === leads.length && Array.isArray(saved?.batches)) {
+        done = new Set<number>(saved.batches);
+      } else {
+        console.log(`Ignoring checkpoint ${progressFile}: it was written for a different leads file.`);
+      }
+    } catch { done = new Set(); }
     if (done.size > 0) console.log(`Resuming: ${done.size} batch(es) already uploaded (from ${progressFile}).`);
   }
+  const saveProgress = () =>
+    fs.writeFileSync(progressFile, JSON.stringify({ file: leadsFilePath, rows: leads.length, batches: [...done] }));
 
   let added = 0, failed = 0;
   const failedRows: any[] = [];
