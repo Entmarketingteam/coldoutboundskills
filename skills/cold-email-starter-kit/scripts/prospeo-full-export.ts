@@ -107,8 +107,19 @@ async function main() {
   let lastPage = progress?.lastPage || 0;
   const failures: { where: string; error: string }[] = [];
 
+  // Dedupe by email, keeping first occurrence. Applied to both the checkpoint
+  // CSV and the final output so duplicates don't compound across resumes.
+  const dedupeByEmail = (rows: Record<string, string>[]) => {
+    const seen = new Set<string>();
+    return rows.filter(r => {
+      if (!r.email || seen.has(r.email)) return false;
+      seen.add(r.email);
+      return true;
+    });
+  };
+
   const saveProgress = () => {
-    writeCsv(output, all);
+    writeCsv(output, dedupeByEmail(all));
     fs.writeFileSync(checkpointPath, JSON.stringify({ filtersKey, lastPage, doneStates: Array.from(doneStates) }));
   };
 
