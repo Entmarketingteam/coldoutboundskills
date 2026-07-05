@@ -190,36 +190,115 @@ async function main() {
     process.exit(1);
   }
 
-  const leads: any[] = JSON.parse(readFileSync(args.leadsFile, "utf8"));
-  const variants: any[] = JSON.parse(readFileSync(args.variantsFile, "utf8"));
+  // Validate all inputs BEFORE any Smartlead mutation
+  let leadsRaw: any, variantsRaw: any;
+  try {
+    leadsRaw = JSON.parse(readFileSync(args.leadsFile, "utf8"));
+  } catch (e: any) {
+    console.error(`Cannot read leads file ${args.leadsFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
+  try {
+    variantsRaw = JSON.parse(readFileSync(args.variantsFile, "utf8"));
+  } catch (e: any) {
+    console.error(`Cannot read variants file ${args.variantsFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
+  const leads: any[] = Array.isArray(leadsRaw) ? leadsRaw : leadsRaw?.leads;
+  const variants: any[] = Array.isArray(variantsRaw) ? variantsRaw : variantsRaw?.variants;
+  if (!Array.isArray(leads) || !leads.length) {
+    console.error(`Leads file ${args.leadsFile} must be a non-empty array (or { leads: [...] })`);
+    process.exit(1);
+  }
+  if (!Array.isArray(variants) || !variants.length) {
+    console.error(`Variants file ${args.variantsFile} must be a non-empty array (or { variants: [...] })`);
+    process.exit(1);
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   const campaignName = `[AUTO] ${today} ${args.domain}`;
 
-  console.error(`\n[Launch] Creating campaign: ${campaignName}`);
-  console.error(`  Leads: ${leads.length} | Variants: ${variants.length}`);
+  // Resumable state: a rerun completes the same campaign instead of duplicating it
+  const stateFile = args.experimentLog
+    ? `${args.experimentLog}.state.json`
+    : `/tmp/auto/upload-state-${today}-${args.domain}.json`;
+  interface UploadState {
+    campaignId?: number;
+    steps: string[];
+    uploadedBatches: number[];
+    uploadedLeads: number;
+    inboxes?: { id: number; email: string }[];
+  }
+  let state: UploadState = { steps: [], uploadedBatches: [], uploadedLeads: 0 };
+  if (existsSync(stateFile)) {
+    try {
+      state = { steps: [], uploadedBatches: [], uploadedLeads: 0, ...JSON.parse(readFileSync(stateFile, "utf8")) };
+    } catch {
+      console.error(`[Launch] Ignoring unreadable state file ${stateFile}`);
+    }
+  }
+  const saveState = () => {
+    mkdirSync(dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  };
+  const done = (step: string) => state.steps.includes(step);
+  const markDone = (step: string) => {
+    state.steps.push(step);
+    saveState();
+  };
 
-  // 1. Create campaign
-  const createBody: any = { name: campaignName };
-  if (args.clientId) createBody.client_id = Number(args.clientId);
-  const campaign = await slPost("/campaigns/create", createBody);
-  const campaignId = campaign.id;
-  console.error(`  Campaign created: #${campaignId}`);
+  // Spend confirmation: campaign creation (and possible activation) needs --yes when unattended
+  console.error(`\n[Launch] Campaign: ${campaignName}`);
+  console.error(`  Leads: ${leads.length} | Variants: ${variants.length}`);
+  console.error(
+    `  Inboxes: ${args.inboxIds?.length ? `ids=${args.inboxIds.join(",")}` : `tag='${args.inboxTag}'`} (count=${args.inboxCount})`
+  );
+  console.error(`  Activate after upload: ${args.activate ? "YES (live sending)" : "no (draft)"}`);
+  if (state.campaignId) console.error(`  Resuming existing campaign #${state.campaignId} from ${stateFile}`);
+  if (!args.yes) {
+    if (!process.stdin.isTTY) {
+      console.error("Refusing to create/modify a campaign without confirmation in non-interactive mode. Pass --yes to proceed.");
+      process.exit(1);
+    }
+    const ok = await confirmPrompt("Proceed? [y/N]");
+    if (!ok) {
+      console.error("Aborted.");
+      process.exit(1);
+    }
+  }
+
+  // 1. Create campaign (skipped when resuming)
+  let campaignId: number;
+  if (state.campaignId) {
+    campaignId = state.campaignId;
+  } else {
+    const createBody: any = { name: campaignName };
+    if (args.clientId) createBody.client_id = Number(args.clientId);
+    const campaign = await slPost("/campaigns/create", createBody);
+    campaignId = campaign.id;
+    state.campaignId = campaignId;
+    saveState();
+    console.error(`  Campaign created: #${campaignId}`);
+  }
 
   // 2. Save sequences with A/B/C variants
-  await slPost(`/campaigns/${campaignId}/sequences`, {
-    sequences: [
-      {
-        seq_number: 1,
-        seq_delay_details: { delay_in_days: 0 },
-        seq_variants: variants.map((v: any) => ({
-          variant_label: v.variant,
-          subject: (v.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
-          email_body: buildBody(v.variant, campaignId, v.body_template),
-        })),
-      },
-    ],
-  });
-  console.error(`  Saved ${variants.length} variants`);
+  if (!done("sequences")) {
+    await slPost(`/campaigns/${campaignId}/sequences`, {
+      sequences: [
+        {
+          seq_number: 1,
+          seq_delay_details: { delay_in_days: 0 },
+          seq_variants: variants.map((v: any) => ({
+            variant_label: v.variant,
+            subject: (v.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
+            email_body: buildBody(v.variant, campaignId, v.body_template),
+          })),
+        },
+      ],
+    });
+    markDone("sequences");
+    console.error(`  Saved ${variants.length} variants`);
+  }
 
   // 3. Select + add inboxes
   const inboxes = await selectInboxes(args.inboxTag, args.inboxCount, args.inboxDomain, args.inboxIds);
