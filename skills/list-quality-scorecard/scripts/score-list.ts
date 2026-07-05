@@ -6,7 +6,7 @@
  *   npx tsx scripts/score-list.ts --list=leads.csv [--icp-file=client-profile.yaml] [--out=scorecard.md]
  */
 
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 
 function parseArgs() {
   const args = process.argv.slice(2);
