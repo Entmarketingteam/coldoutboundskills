@@ -51,6 +51,7 @@ function parseArgs() {
     leads: get("--leads"),
     variants: get("--variants"),
     clientId: get("--client-id"),
+    yes: args.includes("--yes"),
   };
 }
 
