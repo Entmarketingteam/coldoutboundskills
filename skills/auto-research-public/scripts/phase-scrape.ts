@@ -44,20 +44,39 @@ function stripHtml(html: string): string {
     .slice(0, 4000);
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function fetchPage(url: string): Promise<{ url: string; text: string } | null> {
-  try {
-    const resp = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; ColdEmailKit/1.0)" },
-      redirect: "follow",
-    });
-    if (!resp.ok) return null;
-    const html = await resp.text();
-    const text = stripHtml(html);
-    if (text.length < 200) return null;
-    return { url, text };
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const resp = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; ColdEmailKit/1.0)" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!resp.ok) {
+        console.error(`  x ${url} (${resp.status})`);
+        // one retry with backoff on rate-limit / server errors
+        if ((resp.status === 429 || resp.status >= 500) && attempt === 0) {
+          await sleep(2000);
+          continue;
+        }
+        return null;
+      }
+      const html = await resp.text();
+      const text = stripHtml(html);
+      if (text.length < 200) return null;
+      return { url, text };
+    } catch (e: any) {
+      console.error(`  x ${url} (${e?.message ?? e})`);
+      if (attempt === 0) {
+        await sleep(2000);
+        continue;
+      }
+      return null;
+    }
   }
+  return null;
 }
 
 async function main() {
