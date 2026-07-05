@@ -91,10 +91,27 @@ function toCsv(rows: HealthRow[]): string {
   return lines.join("\n");
 }
 
+const FILTER_VALUES: Record<string, string[]> = {
+  reputation: ["good", "fair", "bad", "unknown", "n/a"],
+  warmup: ["on", "off"],
+  health: ["healthy", "warming", "blocked", "active", "connection_failed"],
+};
+
 async function main() {
   const args = process.argv.slice(2);
   const out = parseFlag(args, "--out");
   const filter = parseFlag(args, "--filter");
+
+  if (filter) {
+    const [k, v] = filter.split(":");
+    if (!FILTER_VALUES[k] || !FILTER_VALUES[k].includes(v)) {
+      console.error(`Invalid --filter=${filter}. Allowed combinations:`);
+      for (const [key, vals] of Object.entries(FILTER_VALUES)) {
+        console.error(`  --filter=${key}:${vals.join("|")}`);
+      }
+      process.exit(1);
+    }
+  }
 
   if (!hasFlag(args, "--all") && !parseFlag(args, "--tag") && !parseFlag(args, "--domain") && !parseFlag(args, "--ids")) {
     // default to --all for health dashboard
