@@ -99,7 +99,7 @@ async function main() {
         added += batch.length;
       }
       done.add(i);
-      fs.writeFileSync(progressFile, JSON.stringify([...done]));
+      saveProgress();
     } catch (e: any) {
       failed += batch.length;
       failedRows.push(...leads.slice(i, i + 100).map(l => ({ ...l, failure_reason: e.message })));
