@@ -609,10 +609,8 @@ async function main() {
 
   // 9. DRAFT only. Do not activate.
   if (failedBatches.length) {
-    // Point the checkpoint at the first failed batch so a rerun retries it
-    // (Smartlead ignores leads already present in the campaign).
-    state.leadsUploaded = firstFailedAt;
-    saveState();
+    // Checkpoint already points at the first failed batch (pinned in the loop),
+    // so a rerun retries it (Smartlead ignores leads already present in the campaign).
     console.error(`\n⚠ ${leads.length - uploaded} leads failed in batches: ${failedBatches.join(", ")}`);
     console.error(`  Re-run the same command to retry (state saved to ${statePath}).`);
     process.exitCode = 1;

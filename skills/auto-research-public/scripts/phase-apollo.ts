@@ -13,6 +13,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "fs";
 import { dirname } from "path";
+import { createHash } from "crypto";
 
 const API_KEY = process.env.APOLLO_API_KEY;
 if (!API_KEY) {
