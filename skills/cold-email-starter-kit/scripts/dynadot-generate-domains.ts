@@ -71,6 +71,7 @@ async function main() {
   console.log(`Checking availability on Dynadot (batches of 100)...\n`);
 
   const allResults: DomainCandidate[] = [];
+  const failedBatches: string[] = [];
   for (let i = 0; i < brandSuffix.length; i += 100) {
     const batch = brandSuffix.slice(i, i + 100);
     try {
@@ -78,7 +79,8 @@ async function main() {
       allResults.push(...results);
       process.stdout.write(`Checked ${Math.min(i + 100, brandSuffix.length)}/${brandSuffix.length}\r`);
     } catch (e: any) {
-      console.error(`\nBatch failed: ${e.message}`);
+      console.error(`\nBatch ${i / 100 + 1} failed: ${e.message}`);
+      failedBatches.push(`batch ${i / 100 + 1} (${batch.length} domains): ${e.message}`);
     }
     await sleep(1000);
   }
@@ -91,8 +93,13 @@ async function main() {
     .slice(0, count);
 
   if (available.length === 0) {
-    console.log(`No available domains found under $${maxPrice} for .${tld}.`);
-    console.log("Try a different brand keyword or increase --max-price.");
+    if (failedBatches.length > 0) {
+      console.error(`No available domains found — but ${failedBatches.length} availability check(s) failed:`);
+      failedBatches.forEach(f => console.error(`  ${f}`));
+    } else {
+      console.log(`No available domains found under $${maxPrice} for .${tld}.`);
+      console.log("Try a different brand keyword or increase --max-price.");
+    }
     process.exit(1);
   }
 
