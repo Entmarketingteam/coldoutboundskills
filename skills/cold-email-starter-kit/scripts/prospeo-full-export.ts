@@ -1,11 +1,14 @@
 #!/usr/bin/env tsx
 // Full paginated Prospeo search → CSV.
-// Run: npx tsx scripts/prospeo-full-export.ts --title "VP Sales" --location "United States" --headcount-min 50 --headcount-max 200 --limit 2000
+// Run: npx tsx scripts/prospeo-full-export.ts --title "VP Sales" --location "United States" --headcount-min 50 --headcount-max 200 --limit 2000 [--yes]
 //
 // Handles state-by-state splitting when total > 25K results.
+// Progress is checkpointed to <output>.progress.json so a rerun resumes
+// instead of restarting (and re-spending credits).
 // Output: leads.csv
 
-import { env, required, parseArgs, writeCsv, sleep, retry, multiFlag, confirm } from "./_lib.ts";
+import fs from "node:fs";
+import { required, parseArgs, readCsv, writeCsv, sleep, multiFlag, confirm, fetchJson, numFlag } from "./_lib.ts";
 
 const US_STATES = [
   "California", "Texas", "Florida", "New York", "Illinois", "Pennsylvania",
@@ -16,13 +19,12 @@ const US_STATES = [
 ];
 
 async function searchPage(filters: any, page: number, apiKey: string): Promise<any> {
-  const res = await retry(() => fetch("https://api.prospeo.io/search-person", {
+  // fetchJson: 30s timeout, retries 429/5xx/network with backoff, fails fast on other 4xx.
+  return fetchJson("https://api.prospeo.io/search-person", {
     method: "POST",
     headers: { "X-KEY": apiKey, "Content-Type": "application/json" },
     body: JSON.stringify({ page, filters }),
-  }));
-  if (!res.ok) throw new Error(`Prospeo ${res.status}: ${await res.text()}`);
-  return await res.json();
+  });
 }
 
 function mapResult(r: any): Record<string, string> {
@@ -51,16 +53,17 @@ async function main() {
   const { flags } = parseArgs();
   const titles = multiFlag(flags, "title");
   const location = (flags.location as string) || "United States";
-  const headcountMin = flags["headcount-min"] ? parseInt(flags["headcount-min"] as string) : undefined;
-  const headcountMax = flags["headcount-max"] ? parseInt(flags["headcount-max"] as string) : undefined;
+  const headcountMin = numFlag(flags, "headcount-min");
+  const headcountMax = numFlag(flags, "headcount-max");
   const industries = multiFlag(flags, "industry");
   const techs = multiFlag(flags, "tech");
-  const limit = parseInt((flags.limit as string) || "2000");
+  const limit = numFlag(flags, "limit", 2000)!;
   const output = (flags.output as string) || "leads.csv";
   const verifiedOnly = flags["verified-only"] !== "false";
+  const skipConfirm = !!flags.yes;
 
   if (titles.length === 0) {
-    console.error("Usage: --title 'VP Sales' --title 'Head of Sales' [--location 'United States'] [--headcount-min 50] [--headcount-max 200] [--industry 'Software Development'] [--limit 2000] [--output leads.csv]");
+    console.error("Usage: --title 'VP Sales' --title 'Head of Sales' [--location 'United States'] [--headcount-min 50] [--headcount-max 200] [--industry 'Software Development'] [--limit 2000] [--output leads.csv] [--yes]");
     process.exit(1);
   }
 
@@ -79,6 +82,36 @@ async function main() {
   if (techs.length > 0) baseFilters.company_technology = { include: techs };
   if (verifiedOnly) baseFilters.person_contact_details = { email: ["VERIFIED"] };
 
+  // Checkpoint: resume a previous run with identical filters instead of re-spending credits.
+  const checkpointPath = `${output}.progress.json`;
+  const filtersKey = JSON.stringify({ baseFilters, limit });
+  let progress: { filtersKey: string; lastPage: number; doneStates: string[] } | null = null;
+  if (fs.existsSync(checkpointPath)) {
+    try {
+      const p = JSON.parse(fs.readFileSync(checkpointPath, "utf8"));
+      if (p.filtersKey === filtersKey) {
+        progress = p;
+        console.log(`Resuming from checkpoint ${checkpointPath}.`);
+      } else {
+        console.log("Checkpoint found but filters differ — starting fresh.");
+      }
+    } catch { /* corrupt checkpoint — start fresh */ }
+  }
+
+  const all: Record<string, string>[] = [];
+  if (progress && fs.existsSync(output)) {
+    for (const r of readCsv(output)) all.push(r);
+    console.log(`Loaded ${all.length} previously collected leads from ${output}.`);
+  }
+  const doneStates = new Set<string>(progress?.doneStates || []);
+  let lastPage = progress?.lastPage || 0;
+  const failures: { where: string; error: string }[] = [];
+
+  const saveProgress = () => {
+    writeCsv(output, all);
+    fs.writeFileSync(checkpointPath, JSON.stringify({ filtersKey, lastPage, doneStates: Array.from(doneStates) }));
+  };
+
   // First page to get total count
   console.log("Checking total result count...");
   const first = await searchPage(baseFilters, 1, apiKey);
@@ -95,36 +128,57 @@ async function main() {
 
   console.log(`Found ${totalCount} total matches.`);
   console.log(`Will fetch up to ${willFetch} results (~${estCredits} credits).`);
-  const ok = await confirm(`Confirm? (y/N)`);
-  if (!ok) { console.log("Cancelled."); process.exit(0); }
-
-  const all: any[] = [];
+  if (!skipConfirm) {
+    const ok = await confirm(`Confirm? (y/N)`);
+    if (!ok) { console.log("Cancelled."); process.exit(0); }
+  }
 
   if (totalCount >= 25000 && location === "United States") {
     // State-by-state fallback
     console.log(`Total > 25K, splitting by US state...`);
+    // Don't discard the nationwide first page — those credits are already spent.
+    if (!progress) (first?.results || []).forEach((r: any) => all.push(mapResult(r)));
     for (const state of US_STATES) {
       if (all.length >= limit) break;
-      const stateFilters = JSON.parse(JSON.stringify(baseFilters));
-      stateFilters.person_location_search.include = [`${state}, United States #US`];
-      const sFirst = await searchPage(stateFilters, 1, apiKey);
-      const sTotal = sFirst?.pagination?.total_count || 0;
-      const sPages = Math.min(sFirst?.pagination?.total_page || 0, Math.ceil((limit - all.length) / 25));
-      for (let p = 1; p <= sPages; p++) {
-        if (all.length >= limit) break;
-        const data = p === 1 ? sFirst : await searchPage(stateFilters, p, apiKey);
-        (data?.results || []).forEach((r: any) => all.push(mapResult(r)));
-        await sleep(500);
+      if (doneStates.has(state)) continue;
+      try {
+        const stateFilters = JSON.parse(JSON.stringify(baseFilters));
+        stateFilters.person_location_search.include = [`${state}, United States #US`];
+        const sFirst = await searchPage(stateFilters, 1, apiKey);
+        const sTotal = sFirst?.pagination?.total_count || 0;
+        const sPages = Math.min(sFirst?.pagination?.total_page || 0, Math.ceil((limit - all.length) / 25));
+        for (let p = 1; p <= sPages; p++) {
+          if (all.length >= limit) break;
+          try {
+            const data = p === 1 ? sFirst : await searchPage(stateFilters, p, apiKey);
+            (data?.results || []).forEach((r: any) => all.push(mapResult(r)));
+          } catch (e: any) {
+            failures.push({ where: `${state} page ${p}`, error: e.message });
+          }
+          await sleep(500);
+        }
+        console.log(`  ${state}: ${sTotal} available, collected ${all.length} total so far`);
+      } catch (e: any) {
+        failures.push({ where: `${state} (first page)`, error: e.message });
+        console.error(`  ${state}: failed (${e.message}), skipping.`);
       }
-      console.log(`  ${state}: ${sTotal} available, collected ${all.length} total so far`);
+      doneStates.add(state);
+      saveProgress();
     }
   } else {
-    // Simple pagination
-    for (let p = 1; p <= totalPages; p++) {
+    // Simple pagination (resumes at lastPage + 1 when checkpointed)
+    const startPage = Math.max(1, lastPage + 1);
+    for (let p = startPage; p <= totalPages; p++) {
       if (all.length >= limit) break;
-      const data = p === 1 ? first : await searchPage(baseFilters, p, apiKey);
-      (data?.results || []).forEach((r: any) => all.push(mapResult(r)));
+      try {
+        const data = p === 1 ? first : await searchPage(baseFilters, p, apiKey);
+        (data?.results || []).forEach((r: any) => all.push(mapResult(r)));
+      } catch (e: any) {
+        failures.push({ where: `page ${p}`, error: e.message });
+      }
+      lastPage = p;
       process.stdout.write(`Page ${p}/${totalPages}, collected ${all.length}...\r`);
+      if (p % 10 === 0) saveProgress();
       await sleep(500);
     }
     console.log();
@@ -142,6 +196,15 @@ async function main() {
 
   writeCsv(output, deduped);
   console.log(`\n✅ Saved ${deduped.length} leads to ${output}`);
+
+  if (failures.length > 0) {
+    fs.writeFileSync(checkpointPath, JSON.stringify({ filtersKey, lastPage, doneStates: Array.from(doneStates) }));
+    console.error(`\n⚠️  ${failures.length} request(s) failed:`);
+    failures.forEach(f => console.error(`  ${f.where}: ${f.error}`));
+    console.error(`Checkpoint kept at ${checkpointPath} — re-run the same command to resume.`);
+    process.exit(1);
+  }
+  if (fs.existsSync(checkpointPath)) fs.unlinkSync(checkpointPath);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
