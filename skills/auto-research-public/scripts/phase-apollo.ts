@@ -236,7 +236,7 @@ async function main() {
       const partial = JSON.parse(readFileSync(partialFile, "utf8"));
       if (partial.source !== CHECKPOINT_SOURCE || partial.filtersHash !== filtersHash) {
         console.error(
-          `[Apollo] Ignoring checkpoint ${partialFile} (source=${partial.source ?? "unknown"}, filters mismatch) — starting fresh`
+          `[Apollo] Ignoring checkpoint ${partialFile} (source=${partial.source ?? "unknown"}, script/filters mismatch) — starting fresh`
         );
       } else {
         all = partial.leads ?? [];
