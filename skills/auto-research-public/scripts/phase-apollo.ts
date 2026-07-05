@@ -144,6 +144,7 @@ async function searchPage(params: any): Promise<{ people: any[]; total: number }
 }
 
 // Apollo search returns obfuscated stubs — bulk_match returns full person objects with all fields
+let bulkMatchFailures = 0;
 async function bulkMatchPeople(stubs: any[]): Promise<any[]> {
   if (!stubs.length) return [];
 
@@ -155,26 +156,32 @@ async function bulkMatchPeople(stubs: any[]): Promise<any[]> {
   for (let i = 0; i < ids.length; i += CHUNK) {
     const chunk = ids.slice(i, i + CHUNK);
     try {
-      const resp = await fetch(`${APOLLO_BASE}/people/bulk_match`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-cache",
-          "X-Api-Key": API_KEY as string,
+      const resp = await fetchWithRetry(
+        `${APOLLO_BASE}/people/bulk_match`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+            "X-Api-Key": API_KEY as string,
+          },
+          body: JSON.stringify({
+            details: chunk.map((id: string) => ({ id })),
+            reveal_personal_emails: false,
+          }),
         },
-        body: JSON.stringify({
-          details: chunk.map((id: string) => ({ id })),
-          reveal_personal_emails: false,
-        }),
-      });
+        "bulk_match"
+      );
       if (resp.ok) {
         const data = await resp.json();
         results.push(...(data.matches ?? []));
       } else {
-        console.error(`[Apollo bulk_match] ${resp.status}: ${await resp.text().catch(() => "")}`);
+        bulkMatchFailures++;
+        console.error(`[Apollo bulk_match] ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`);
       }
-    } catch (e) {
-      console.error("[Apollo bulk_match] Error:", e);
+    } catch (e: any) {
+      bulkMatchFailures++;
+      console.error(`[Apollo bulk_match] Error: ${e?.message ?? e}`);
     }
     if (i + CHUNK < ids.length) await new Promise((r) => setTimeout(r, 300));
   }
