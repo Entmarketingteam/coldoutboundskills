@@ -212,12 +212,36 @@ async function main() {
     process.exit(1);
   }
 
-  const filters = JSON.parse(readFileSync(filtersFile, "utf8"));
-  const all: Lead[] = [];
+  let filters: any;
+  try {
+    filters = JSON.parse(readFileSync(filtersFile, "utf8"));
+  } catch (e: any) {
+    console.error(`Cannot read filters file ${filtersFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
+
+  // Resume from a partial checkpoint if a previous run crashed mid-pagination
+  const partialFile = `${out}.partial.json`;
+  let all: Lead[] = [];
+  let startPage = 1;
+  if (existsSync(partialFile)) {
+    try {
+      const partial = JSON.parse(readFileSync(partialFile, "utf8"));
+      all = partial.leads ?? [];
+      startPage = (partial.lastPage ?? 0) + 1;
+      console.error(`[Apollo] Resuming from ${partialFile}: ${all.length} leads, page ${startPage}`);
+    } catch {
+      console.error(`[Apollo] Ignoring unreadable checkpoint ${partialFile}`);
+    }
+  }
+  const writePartial = (lastPage: number) => {
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(partialFile, JSON.stringify({ lastPage, leads: all }));
+  };
 
   console.error(`[Apollo] Searching up to ${maxPages} pages / ${maxLeads} leads...`);
 
-  for (let page = 1; page <= maxPages; page++) {
+  for (let page = startPage; page <= maxPages; page++) {
     const params = buildApolloParams(filters, page);
     const { people, total } = await searchPage(params);
 
@@ -232,6 +256,7 @@ async function main() {
       .filter((l) => industryMatches(l.company_industry, filters.industries ?? []));
     all.push(...mapped);
 
+    writePartial(page); // checkpoint so a crash/rerun resumes instead of re-spending credits
     if (page % 5 === 0) console.error(`[Apollo] Page ${page}: ${all.length} leads so far`);
     if (all.length >= maxLeads) break;
 
@@ -245,9 +270,19 @@ async function main() {
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(
     out,
-    JSON.stringify({ leads, stats: { total: leads.length, withEmail, withDesc } }, null, 2)
+    JSON.stringify(
+      { leads, stats: { total: leads.length, withEmail, withDesc, bulk_match_failures: bulkMatchFailures } },
+      null,
+      2
+    )
   );
+  rmSync(partialFile, { force: true });
+  if (bulkMatchFailures) console.error(`[Apollo] ${bulkMatchFailures} bulk_match chunk(s) failed`);
   console.error(`\nWrote ${out} — ${leads.length} leads (${withEmail} with email, ${withDesc} with desc)`);
+  if (!leads.length) {
+    console.error("[Apollo] No leads found — failing so the pipeline halts");
+    process.exit(1);
+  }
 }
 
 main().catch((e) => {
