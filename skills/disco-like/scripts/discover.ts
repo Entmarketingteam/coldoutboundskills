@@ -26,7 +26,11 @@ function parseArgs() {
   const args = process.argv.slice(2);
   const get = (flag: string) => {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
-    return arg ? arg.split("=").slice(1).join("=") : undefined;
+    if (arg) return arg.split("=").slice(1).join("=");
+    // also accept space-separated form: --flag value (as documented in SKILL.md)
+    const i = args.indexOf(flag);
+    if (i !== -1 && args[i + 1] !== undefined && !args[i + 1].startsWith("--")) return args[i + 1];
+    return undefined;
   };
   return {
     domains: get("--domains"),
