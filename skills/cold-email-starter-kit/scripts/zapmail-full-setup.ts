@@ -55,19 +55,27 @@ async function waitUntilAssignable(domainNames: string[], apiKey: string, timeou
   while (Date.now() < deadline) {
     // paginate through assignable — HTTP errors throw (429/5xx retried with backoff
     // inside fetchJson) rather than being silently treated as end-of-pagination.
-    for (let page = 1; page < 100; page++) {
-      const j: any = await fetchJson(`https://api.zapmail.ai/api/v2/domains/assignable?limit=100&page=${page}`, {
-        headers: { "x-auth-zapmail": apiKey },
-      });
-      const items: any[] = j?.data || [];
-      if (items.length === 0) break;
-      for (const item of items) {
-        if (target.has(item.domainName) && !seen.has(item.domainName)) {
-          found.push({ domain: item.domainName, uuid: item.uuid });
-          seen.add(item.domainName);
+    try {
+      for (let page = 1; page < 100; page++) {
+        const j: any = await fetchJson(`https://api.zapmail.ai/api/v2/domains/assignable?limit=100&page=${page}`, {
+          headers: { "x-auth-zapmail": apiKey },
+        });
+        const items: any[] = j?.data || [];
+        if (items.length === 0) break;
+        for (const item of items) {
+          if (target.has(item.domainName) && !seen.has(item.domainName)) {
+            found.push({ domain: item.domainName, uuid: item.uuid });
+            seen.add(item.domainName);
+          }
         }
+        if (items.length < 100) break;
       }
-      if (items.length < 100) break;
+    } catch (e: any) {
+      // A failed poll cycle (even after fetchJson's retries) must not abort the
+      // whole run mid-pipeline — wait out the cycle and retry until the deadline.
+      console.warn(`Assignable poll failed (${e.message}) — retrying in 5 min...`);
+      await sleep(5 * 60 * 1000);
+      continue;
     }
 
     if (found.length / domainNames.length >= 0.95) {
