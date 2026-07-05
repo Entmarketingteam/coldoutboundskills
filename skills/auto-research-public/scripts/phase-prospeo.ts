@@ -9,7 +9,7 @@
  *   npx tsx scripts/phase-prospeo.ts --filters-file=/tmp/auto/filters.json --max-leads=1000 --out=/tmp/auto/leads.json
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "fs";
 import { dirname } from "path";
 
 const API_KEY = process.env.PROSPEO_API_KEY;
