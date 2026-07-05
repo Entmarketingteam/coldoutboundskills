@@ -55,7 +55,7 @@ async function fetchCampaignStats(campaignId: string): Promise<{ sent: number }>
     let resp: Response;
     try {
       resp = await fetch(url.toString(), { signal: AbortSignal.timeout(30_000) });
-    } catch (err) {
+    } catch {
       const wait = 1000 * 2 ** attempt;
       console.error(`  [network error] ${pathname} retry in ${wait}ms`);
       await new Promise((r) => setTimeout(r, wait));
