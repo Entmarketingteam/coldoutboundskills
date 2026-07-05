@@ -76,8 +76,20 @@ interface Reply {
 }
 
 async function fetchJson(url: string): Promise<any> {
+  // Use the pathname in messages — the full URL carries api_key as a query param.
+  const pathname = new URL(url).pathname;
+  let lastErr = "";
   for (let attempt = 0; attempt < 5; attempt++) {
-    const resp = await fetch(url);
+    let resp: Response;
+    try {
+      resp = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    } catch (err) {
+      lastErr = sanitize(String(err)).slice(0, 200);
+      const wait = 1000 * 2 ** attempt;
+      console.error(`  [network error: ${lastErr}] ${pathname} retry in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
     if (resp.status === 429 || resp.status >= 500) {
       const wait = 1000 * 2 ** attempt;
       console.error(`  [${resp.status}] retry in ${wait}ms`);
@@ -86,11 +98,16 @@ async function fetchJson(url: string): Promise<any> {
     }
     if (!resp.ok) {
       const body = await resp.text().catch(() => "");
-      throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      throw new Error(`HTTP ${resp.status} from ${pathname}: ${body.slice(0, 200)}`);
     }
-    return resp.json();
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Invalid JSON from ${pathname}: ${text.slice(0, 200)}`);
+    }
   }
-  throw new Error("Exhausted retries");
+  throw new Error(`Exhausted retries for ${pathname}${lastErr ? ` (last error: ${lastErr})` : ""}`);
 }
 
 async function listLeadsWithReplies(
