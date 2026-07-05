@@ -177,7 +177,7 @@ async function main() {
         r.company?.description || r.company?.description_ai || "",
     }));
     all.push(...results);
-    if (page % 5 === 0) writePartial(page); // checkpoint so a crash/rerun resumes instead of re-spending credits
+    writePartial(page); // checkpoint every page so a crash/rerun resumes instead of re-spending credits
     if (page % 10 === 0) console.error(`[Prospeo] Page ${page}: ${all.length} total leads`);
     if (results.length < 25) break;
     if (all.length >= maxLeads) break;
