@@ -22,27 +22,59 @@ function parseArgs() {
 }
 
 function parseCsv(text: string): { headers: string[]; rows: Record<string, string>[] } {
-  const lines = text.trim().split("\n");
-  const headers = lines[0].split(",").map((h) => h.replace(/^"|"$/g, "").trim().toLowerCase());
-  const rows = lines.slice(1).map((line) => {
-    const cols: string[] = [];
-    let cur = "";
-    let inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
+  // Whole-file quote-aware scan: handles newlines inside quoted fields and
+  // RFC 4180 escaped quotes ("" -> ").
+  const records: string[][] = [];
+  let cols: string[] = [];
+  let cur = "";
+  let inQ = false;
+  const pushField = () => {
+    cols.push(cur);
+    cur = "";
+  };
+  const pushRecord = () => {
+    pushField();
+    // Skip blank lines
+    if (cols.length === 1 && cols[0].trim() === "") {
+      cols = [];
+      return;
+    }
+    records.push(cols);
+    cols = [];
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
       if (c === '"') {
-        inQ = !inQ;
-      } else if (c === "," && !inQ) {
-        cols.push(cur);
-        cur = "";
+        if (text[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQ = false;
+        }
       } else {
         cur += c;
       }
+    } else if (c === '"') {
+      inQ = true;
+    } else if (c === ",") {
+      pushField();
+    } else if (c === "\n") {
+      pushRecord();
+    } else if (c === "\r") {
+      if (text[i + 1] === "\n") i++;
+      pushRecord();
+    } else {
+      cur += c;
     }
-    cols.push(cur);
+  }
+  if (cur.length || cols.length) pushRecord();
+
+  const headers = (records[0] ?? []).map((h) => h.trim().toLowerCase());
+  const rows = records.slice(1).map((record) => {
     const row: Record<string, string> = {};
     headers.forEach((h, i) => {
-      row[h] = (cols[i] ?? "").replace(/^"|"$/g, "").trim();
+      row[h] = (record[i] ?? "").trim();
     });
     return row;
   });
