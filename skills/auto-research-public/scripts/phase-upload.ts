@@ -300,29 +300,43 @@ async function main() {
     console.error(`  Saved ${variants.length} variants`);
   }
 
-  // 3. Select + add inboxes
-  const inboxes = await selectInboxes(args.inboxTag, args.inboxCount, args.inboxDomain, args.inboxIds);
-  if (!inboxes.length) throw new Error(`No inboxes matching tag=${args.inboxTag}`);
-  let remainingIds = inboxes.map((i) => i.id);
-  let retries = 0;
-  while (remainingIds.length && retries < 50) {
-    try {
-      await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: remainingIds });
-      break;
-    } catch (err: any) {
-      const m = err.message?.match(/Email account id - (\d+) not allowed/);
-      if (m) {
-        const bad = Number(m[1]);
-        remainingIds = remainingIds.filter((id) => id !== bad);
-        retries++;
-      } else throw err;
+  // 3. Select + add inboxes (skipped when resuming past this step)
+  let inboxes: { id: number; email: string }[] = state.inboxes ?? [];
+  if (!done("inboxes")) {
+    inboxes = await selectInboxes(args.inboxTag, args.inboxCount, args.inboxDomain, args.inboxIds);
+    if (!inboxes.length) throw new Error(`No inboxes matching tag=${args.inboxTag}`);
+    let remainingIds = inboxes.map((i) => i.id);
+    let retries = 0;
+    let attached = false;
+    while (remainingIds.length && retries < 50) {
+      try {
+        await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: remainingIds });
+        attached = true;
+        break;
+      } catch (err: any) {
+        const m = err.message?.match(/Email account id - (\d+) not allowed/);
+        if (m) {
+          const bad = Number(m[1]);
+          remainingIds = remainingIds.filter((id) => id !== bad);
+          retries++;
+        } else throw err;
+      }
     }
+    if (!attached || !remainingIds.length) {
+      console.error(`  Failed to attach any inbox (${retries} rejected) — aborting before lead upload`);
+      process.exit(1);
+    }
+    inboxes = inboxes.filter((i) => remainingIds.includes(i.id));
+    state.inboxes = inboxes;
+    markDone("inboxes");
+    console.error(`  Added ${remainingIds.length} inboxes (${retries} rejected)`);
   }
-  console.error(`  Added ${remainingIds.length} inboxes (${retries} rejected)`);
 
-  // 4. Upload leads in batches of 100
-  let uploaded = 0;
+  // 4. Upload leads in batches of 100 (already-uploaded batches are skipped on resume)
+  const failedBatches: { batch: number; error: string }[] = [];
   for (let i = 0; i < leads.length; i += LEADS_BATCH) {
+    const batchIdx = Math.floor(i / LEADS_BATCH) + 1;
+    if (state.uploadedBatches.includes(batchIdx)) continue;
     const batch = leads.slice(i, i + LEADS_BATCH).map((l: any) => ({
       email: l.email,
       first_name: l.first_name || "",
