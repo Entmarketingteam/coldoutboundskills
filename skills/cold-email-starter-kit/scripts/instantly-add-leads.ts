@@ -5,6 +5,7 @@
 // .instantly-add-leads.progress.<campaignId>.json — a rerun skips them.
 
 import fs from "node:fs";
+import path from "node:path";
 import { required, parseArgs, readCsv, writeCsv, fetchJson } from "./_lib.ts";
 
 const API = "https://api.instantly.ai";
