@@ -16,6 +16,11 @@ import { dirname } from "path";
 const API_BASE = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
 
+if (!API_KEY) {
+  console.error("Missing env var: SMARTLEAD_API_KEY");
+  process.exit(1);
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const get = (flag: string) => {
