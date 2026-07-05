@@ -91,8 +91,17 @@ function pct(n: number, d: number): string {
 
 async function main() {
   const { replies: replyPath, campaignId, out } = parseArgs();
-  const classified: { lead_id: string; label: string; confidence?: number; reason?: string }[] =
-    JSON.parse(readFileSync(replyPath, "utf8"));
+  let classified: { lead_id: string; label: string; confidence?: number; reason?: string }[];
+  try {
+    classified = JSON.parse(readFileSync(replyPath, "utf8"));
+  } catch (err: any) {
+    console.error(`Cannot read --replies file ${replyPath}: ${err.message}`);
+    process.exit(1);
+  }
+  if (!Array.isArray(classified)) {
+    console.error("--replies must be a JSON array of {lead_id, label} objects");
+    process.exit(1);
+  }
 
   const { sent } = await fetchCampaignStats(campaignId);
 
