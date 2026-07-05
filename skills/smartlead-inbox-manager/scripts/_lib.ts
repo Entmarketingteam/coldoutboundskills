@@ -126,7 +126,7 @@ export async function selectInboxes(args: string[]): Promise<InboxAccount[]> {
 
   const ids = parseFlag(args, "--ids");
   if (ids) {
-    const idSet = new Set(ids.split(",").map((x) => Number(x.trim())));
+    const idSet = parseIds(ids.split(","), "--ids");
     return all.filter((a) => idSet.has(a.id));
   }
 
