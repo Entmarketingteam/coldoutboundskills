@@ -360,33 +360,51 @@ async function main() {
     }));
     try {
       await slPost(`/campaigns/${campaignId}/leads`, { lead_list: batch });
-      uploaded += batch.length;
+      state.uploadedBatches.push(batchIdx);
+      state.uploadedLeads += batch.length;
+      saveState();
     } catch (err: any) {
-      console.error(`    batch ${Math.floor(i / LEADS_BATCH) + 1}: ${err.message.slice(0, 200)}`);
+      console.error(`    batch ${batchIdx}: ${err.message.slice(0, 200)}`);
+      failedBatches.push({ batch: batchIdx, error: err.message.slice(0, 200) });
     }
     await new Promise((r) => setTimeout(r, 300));
   }
-  console.error(`  Uploaded ${uploaded} leads`);
+  const uploaded = state.uploadedLeads;
+  console.error(`  Uploaded ${uploaded} leads (${failedBatches.length} failed batches)`);
+  if (uploaded === 0) {
+    console.error(`  No leads uploaded — skipping settings/activation. Failed batches:`);
+    for (const f of failedBatches) console.error(`    batch ${f.batch}: ${f.error}`);
+    process.exit(1);
+  }
 
   // 5. Settings + schedule
-  await slPost(`/campaigns/${campaignId}/settings`, {
-    track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
-    stop_lead_settings: "REPLY_TO_AN_EMAIL",
-    send_as_plain_text: false,
-    enable_ai_esp_matching: false,
-  });
-  await slPost(`/campaigns/${campaignId}/schedule`, {
-    timezone: "America/New_York",
-    days_of_the_week: [1, 2, 3, 4, 5],
-    start_hour: "08:00",
-    end_hour: "17:00",
-    min_time_btw_emails: 8,
-    max_new_leads_per_day: 1000,
-  });
+  if (!done("settings")) {
+    await slPost(`/campaigns/${campaignId}/settings`, {
+      track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
+      stop_lead_settings: "REPLY_TO_AN_EMAIL",
+      send_as_plain_text: false,
+      enable_ai_esp_matching: false,
+    });
+    markDone("settings");
+  }
+  if (!done("schedule")) {
+    await slPost(`/campaigns/${campaignId}/schedule`, {
+      timezone: "America/New_York",
+      days_of_the_week: [1, 2, 3, 4, 5],
+      start_hour: "08:00",
+      end_hour: "17:00",
+      min_time_btw_emails: 8,
+      max_new_leads_per_day: 1000,
+    });
+    markDone("schedule");
+  }
 
   // 6. Activate
   if (args.activate) {
-    await slPost(`/campaigns/${campaignId}/status`, { status: "START" });
+    if (!done("activated")) {
+      await slPost(`/campaigns/${campaignId}/status`, { status: "START" });
+      markDone("activated");
+    }
     console.error(`  Campaign #${campaignId} is LIVE`);
   } else {
     console.error(`  Campaign #${campaignId} created in DRAFT`);
