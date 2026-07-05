@@ -140,6 +140,14 @@ function main() {
     console.error("Usage: --list=leads.csv [--icp-file=profile.yaml] [--out=scorecard.md]");
     process.exit(1);
   }
+  if (!existsSync(list)) {
+    console.error(`File not found: ${list}`);
+    process.exit(1);
+  }
+  if (icpFile && !existsSync(icpFile)) {
+    console.error(`File not found: ${icpFile}`);
+    process.exit(1);
+  }
 
   const { rows } = parseCsv(readFileSync(list, "utf8"));
   const total = rows.length;
