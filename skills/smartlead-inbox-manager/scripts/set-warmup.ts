@@ -62,32 +62,33 @@ async function main() {
         };
 
   console.error(`Payload: ${JSON.stringify(body)}`);
-  console.error(`Proceeding in 3s... (Ctrl+C to abort)`);
-  await new Promise((r) => setTimeout(r, 3000));
+  await confirmProceed(args, `Setting warmup (${mode}) on ${inboxes.length} inboxes`, 3);
 
   let ok = 0;
   let fail = 0;
+  const failedIds: number[] = [];
   await runWithConcurrency(inboxes, 5, async (inbox, i) => {
     const url = `${API_BASE}/email-accounts/${inbox.id}/warmup?api_key=${API_KEY}`;
     try {
-      const resp = await fetch(url, {
+      await fetchJson(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!resp.ok) {
-        const t = await resp.text().catch(() => "");
-        throw new Error(`${resp.status}: ${t.slice(0, 120)}`);
-      }
       ok++;
       if ((i + 1) % 20 === 0) console.error(`  ${i + 1}/${inboxes.length} processed`);
     } catch (err) {
       fail++;
+      failedIds.push(inbox.id);
       console.error(`  [${inbox.id}] ${inbox.from_email}: ${String(err).slice(0, 200)}`);
     }
   });
 
   console.error(`\nDone. ${ok} updated, ${fail} failed.`);
+  if (fail > 0) {
+    console.error(`Failed ids (retry with --ids=...): ${failedIds.join(",")}`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch((e) => {
