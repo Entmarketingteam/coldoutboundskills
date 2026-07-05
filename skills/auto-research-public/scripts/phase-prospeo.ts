@@ -108,7 +108,7 @@ async function main() {
       const partial = JSON.parse(readFileSync(partialFile, "utf8"));
       if (partial.source !== CHECKPOINT_SOURCE || partial.filtersHash !== filtersHash) {
         console.error(
-          `[Prospeo] Ignoring checkpoint ${partialFile} (source=${partial.source ?? "unknown"}, filters mismatch) — starting fresh`
+          `[Prospeo] Ignoring checkpoint ${partialFile} (source=${partial.source ?? "unknown"}, script/filters mismatch) — starting fresh`
         );
       } else {
         all = partial.leads ?? [];
