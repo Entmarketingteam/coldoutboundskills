@@ -14,7 +14,8 @@
  *   --since=YYYY-MM-DD    Only replies after this date
  */
 
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync } from "fs";
+import { dirname } from "path";
 
 const API_BASE = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
@@ -22,6 +23,11 @@ const API_KEY = process.env.SMARTLEAD_API_KEY;
 if (!API_KEY) {
   console.error("Missing env var: SMARTLEAD_API_KEY");
   process.exit(1);
+}
+
+// Never let the API key (passed as a query param) leak into logs/errors.
+function sanitize(s: string): string {
+  return API_KEY ? s.split(API_KEY).join("***") : s;
 }
 
 function parseArgs() {
