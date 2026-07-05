@@ -79,12 +79,15 @@ export function multiFlag(flags: Record<string, string | boolean>, key: string):
 // CSV (minimal, handles quoted fields)
 // ─────────────────────────────────────────────────────────
 export function readCsv(filepath: string): Record<string, string>[] {
-  const raw = fs.readFileSync(filepath, "utf8");
-  const lines = raw.split(/\r?\n/).filter(l => l.length > 0);
+  if (!fs.existsSync(filepath)) {
+    throw new Error(`CSV file not found: ${filepath}`);
+  }
+  let raw = fs.readFileSync(filepath, "utf8");
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // strip UTF-8 BOM
+  const lines = parseCsvText(raw);
   if (lines.length === 0) return [];
-  const headers = parseCsvLine(lines[0]);
-  return lines.slice(1).map(line => {
-    const values = parseCsvLine(line);
+  const headers = lines[0];
+  return lines.slice(1).map(values => {
     const row: Record<string, string> = {};
     headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
     return row;
@@ -96,7 +99,9 @@ export function writeCsv(filepath: string, rows: Record<string, any>[]): void {
     fs.writeFileSync(filepath, "");
     return;
   }
-  const headers = Array.from(rows.reduce((s, r) => { Object.keys(r).forEach(k => s.add(k)); return s; }, new Set<string>()));
+  const headerSet = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r)) headerSet.add(k);
+  const headers = Array.from(headerSet);
   const out: string[] = [headers.join(",")];
   for (const r of rows) {
     out.push(headers.map(h => escapeCsv(r[h])).join(","));
@@ -104,24 +109,36 @@ export function writeCsv(filepath: string, rows: Record<string, any>[]): void {
   fs.writeFileSync(filepath, out.join("\n") + "\n");
 }
 
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
+// Quote-aware full-file CSV parser: handles quoted fields containing
+// commas, escaped quotes, and embedded newlines (which writeCsv legally emits).
+function parseCsvText(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
   let cur = "";
   let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
     if (inQuote) {
-      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; }
       else if (c === '"') { inQuote = false; }
       else { cur += c; }
     } else {
       if (c === '"') { inQuote = true; }
-      else if (c === ",") { out.push(cur); cur = ""; }
+      else if (c === ",") { row.push(cur); cur = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(cur); cur = "";
+        if (!(row.length === 1 && row[0] === "")) rows.push(row); // skip blank lines
+        row = [];
+      }
       else { cur += c; }
     }
   }
-  out.push(cur);
-  return out;
+  if (cur.length > 0 || row.length > 0) {
+    row.push(cur);
+    if (!(row.length === 1 && row[0] === "")) rows.push(row);
+  }
+  return rows;
 }
 
 function escapeCsv(v: any): string {
