@@ -147,16 +147,25 @@ async function verifyEmail(email: string): Promise<"ok" | "invalid" | "skip"> {
   }
 }
 
-async function pool<T, R>(items: T[], concurrency: number, fn: (t: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
+async function pool<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (t: T) => Promise<R>,
+  failures?: string[]
+): Promise<(R | null)[]> {
+  const out: (R | null)[] = new Array(items.length);
   let i = 0;
   const workers = Array.from({ length: concurrency }, async () => {
     while (i < items.length) {
       const idx = i++;
       try {
         out[idx] = await fn(items[idx]);
-      } catch (e) {
-        out[idx] = null as any;
+      } catch (e: any) {
+        // log the error message only — never keys/URLs
+        const msg = (e?.message ?? String(e)).slice(0, 200);
+        console.error(`  ! item ${idx} failed: ${msg}`);
+        failures?.push(msg);
+        out[idx] = null;
       }
     }
   });
