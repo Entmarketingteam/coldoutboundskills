@@ -44,6 +44,12 @@ function parseArgs() {
     console.error("Usage: --campaign-id=12345 [--out=path] [--client-id=X] [--since=YYYY-MM-DD]");
     process.exit(1);
   }
+  if (since && Number.isNaN(new Date(since).getTime())) {
+    console.error(`--since must be YYYY-MM-DD, got: ${since}`);
+    process.exit(1);
+  }
+  // Fail fast if the output directory doesn't exist — before any API work.
+  mkdirSync(dirname(out), { recursive: true });
   return { campaignId, out, clientId, since };
 }
 
