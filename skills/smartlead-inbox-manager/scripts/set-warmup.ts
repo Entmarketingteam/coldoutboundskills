@@ -15,7 +15,7 @@
  *   --mode=insurance    warmup on, low maintenance (15/day, no ramp)
  */
 
-import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency } from "./_lib";
+import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency, fetchJson, confirmProceed } from "./_lib.js";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -26,8 +26,21 @@ async function main() {
   }
 
   const warmupPerDay = Number(parseFlag(args, "--warmup-per-day") ?? (mode === "insurance" ? 15 : 40));
+  if (!Number.isFinite(warmupPerDay) || warmupPerDay < 0) {
+    console.error(`--warmup-per-day must be a non-negative number, got: ${parseFlag(args, "--warmup-per-day")}`);
+    process.exit(1);
+  }
   const ramp = Number(parseFlag(args, "--ramp") ?? (mode === "insurance" ? 0 : 5));
+  if (!Number.isFinite(ramp) || ramp < 0) {
+    console.error(`--ramp must be a non-negative number, got: ${parseFlag(args, "--ramp")}`);
+    process.exit(1);
+  }
   const replyRate = parseFlag(args, "--reply-rate") ?? "20";
+  const replyRateNum = Number(replyRate);
+  if (!Number.isFinite(replyRateNum) || replyRateNum < 0 || replyRateNum > 100) {
+    console.error(`--reply-rate must be a number between 0 and 100, got: ${replyRate}`);
+    process.exit(1);
+  }
 
   console.error(`Selecting inboxes...`);
   const inboxes = await selectInboxes(args);
