@@ -68,17 +68,30 @@ async function fetchWithRetry(url: string, init: RequestInit, label: string, tim
 
 async function enrichEmail(lead: any): Promise<string> {
   if (!lead.first_name || !lead.last_name || !lead.company_domain) return "";
-  const resp = await fetch("https://api.prospeo.io/email-finder", {
-    method: "POST",
-    headers: { "X-KEY": PROSPEO_KEY!, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      first_name: lead.first_name,
-      last_name: lead.last_name,
-      company: lead.company_domain,
-    }),
-  });
-  if (!resp.ok) return "";
-  const data = await resp.json();
+  // 429/5xx retried with backoff inside fetchWithRetry; throws on exhaustion (counted as a failure, not a miss)
+  const resp = await fetchWithRetry(
+    "https://api.prospeo.io/email-finder",
+    {
+      method: "POST",
+      headers: { "X-KEY": PROSPEO_KEY!, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        first_name: lead.first_name,
+        last_name: lead.last_name,
+        company: lead.company_domain,
+      }),
+    },
+    "[Prospeo email-finder]"
+  );
+  if (resp.status === 404) return ""; // genuine "email not found"
+  if (!resp.ok) {
+    throw new Error(`[Prospeo email-finder] ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`);
+  }
+  let data: any;
+  try {
+    data = await resp.json();
+  } catch {
+    throw new Error("[Prospeo email-finder] response was not valid JSON");
+  }
   const email = data.response?.email || data.email || "";
   if (typeof email === "string" && email.includes("@")) return email;
   return "";
