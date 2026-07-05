@@ -202,14 +202,28 @@ async function main() {
       min_time_unit: "minutes",
       is_warmup: true,
     };
-    const created = await fetchJson(
-      `${DELIVERY_BASE}/spam-test/manual?api_key=${API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(createBody),
-      }
-    );
+    // Single attempt, no retries: this POST spends credits and sends from live
+    // inboxes. A retry after a timeout/5xx could create a duplicate test whose
+    // id we'd never learn (only the last id is checkpointed).
+    let created: any;
+    try {
+      created = await fetchJson(
+        `${DELIVERY_BASE}/spam-test/manual?api_key=${API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(createBody),
+        },
+        1
+      );
+    } catch (err) {
+      console.error(
+        "Spam-test create request failed. NOT retrying (a duplicate would consume credits). " +
+          "The test MAY still have been created server-side — check the Smart Delivery dashboard " +
+          "and, if it exists, resume with --test-id=<id> instead of re-running create."
+      );
+      throw err;
+    }
     testId = created.id ?? created.spamTestId;
     if (testId == null) {
       throw new Error(`create response had no id: ${JSON.stringify(created).slice(0, 300)}`);
