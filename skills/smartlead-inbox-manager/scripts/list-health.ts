@@ -15,7 +15,7 @@
  */
 
 import { writeFileSync } from "fs";
-import { parseFlag, selectInboxes, hasFlag, InboxAccount } from "./_lib";
+import { parseFlag, selectInboxes, hasFlag, InboxAccount } from "./_lib.js";
 
 interface HealthRow {
   id: number;
