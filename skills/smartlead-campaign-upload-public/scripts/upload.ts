@@ -469,49 +469,66 @@ async function main() {
   }
 
   // 4. Save sequences
-  const slSequences = v.sequences.map((seq: any) => ({
-    seq_number: seq.step,
-    seq_delay_details: { delay_in_days: seq.delay_days },
-    seq_variants: seq.variants.map((va: any) => ({
-      variant_label: va.label,
-      subject: (va.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
-      email_body: va.body,
-    })),
-  }));
-  await slPost(`/campaigns/${campaignId}/sequences`, { sequences: slSequences });
-  console.error(`  ✓ Sequence saved (${v.sequences.length} steps)`);
+  if (state.sequencesDone) {
+    console.error(`  ✓ Sequences already saved (resumed)`);
+  } else {
+    const slSequences = v.sequences.map((seq: any) => ({
+      seq_number: seq.step,
+      seq_delay_details: { delay_in_days: seq.delay_days },
+      seq_variants: seq.variants.map((va: any) => ({
+        variant_label: va.label,
+        subject: (va.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
+        email_body: va.body,
+      })),
+    }));
+    await slPost(`/campaigns/${campaignId}/sequences`, { sequences: slSequences });
+    console.error(`  ✓ Sequence saved (${v.sequences.length} steps)`);
+    state.sequencesDone = true;
+    saveState();
+  }
 
   // 5. Select inboxes by tag, LRU by daily_sent_count
-  const allInboxes = await listInboxes();
-  const tagged = allInboxes.filter((inb: any) =>
-    (inb.tags ?? []).some((t: any) => t.name === v.inbox_selection.tag) &&
-    inb.is_smtp_success &&
-    !inb.warmup_details?.is_warmup_blocked
-  );
-  tagged.sort((a: any, b: any) => (a.daily_sent_count ?? 0) - (b.daily_sent_count ?? 0));
-  const selected = tagged.slice(0, v.inbox_selection.count);
-  if (!selected.length) {
-    throw new Error(`No healthy inboxes found with tag=${v.inbox_selection.tag}. Run /smartlead-inbox-manager to tag inboxes first.`);
-  }
-  if (selected.length < v.inbox_selection.count) {
-    console.error(`  ⚠ Only ${selected.length} inboxes matched (requested ${v.inbox_selection.count}). Proceeding with what's available.`);
-  }
-  let attachIds = selected.map((i: any) => i.id);
-  let retries = 0;
-  while (attachIds.length && retries < 10) {
-    try {
-      await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: attachIds });
-      break;
-    } catch (err: any) {
-      const m = err.message?.match(/Email account id - (\d+) not allowed/);
-      if (m) {
-        const bad = Number(m[1]);
-        attachIds = attachIds.filter((id: number) => id !== bad);
-        retries++;
-      } else throw err;
+  if (state.inboxesDone) {
+    console.error(`  ✓ Inboxes already attached (resumed)`);
+  } else {
+    const allInboxes = await listInboxes();
+    const tagged = allInboxes.filter((inb: any) =>
+      (inb.tags ?? []).some((t: any) => t.name === v.inbox_selection.tag) &&
+      inb.is_smtp_success &&
+      !inb.warmup_details?.is_warmup_blocked
+    );
+    tagged.sort((a: any, b: any) => (a.daily_sent_count ?? 0) - (b.daily_sent_count ?? 0));
+    const selected = tagged.slice(0, v.inbox_selection.count);
+    if (!selected.length) {
+      throw new Error(`No healthy inboxes found with tag=${v.inbox_selection.tag}. Run /smartlead-inbox-manager to tag inboxes first.`);
     }
+    if (selected.length < v.inbox_selection.count) {
+      console.error(`  ⚠ Only ${selected.length} inboxes matched (requested ${v.inbox_selection.count}). Proceeding with what's available.`);
+    }
+    let attachIds = selected.map((i: any) => i.id);
+    let retries = 0;
+    let attached = false;
+    while (attachIds.length && retries < 10) {
+      try {
+        await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: attachIds });
+        attached = true;
+        break;
+      } catch (err: any) {
+        const m = err.message?.match(/Email account id - (\d+) not allowed/);
+        if (m) {
+          const bad = Number(m[1]);
+          attachIds = attachIds.filter((id: number) => id !== bad);
+          retries++;
+        } else throw err;
+      }
+    }
+    if (!attached || !attachIds.length) {
+      throw new Error(`Failed to attach inboxes to campaign ${campaignId} after ${retries} retries`);
+    }
+    console.error(`  ✓ ${attachIds.length} inboxes attached (tag=${v.inbox_selection.tag}, LRU)`);
+    state.inboxesDone = true;
+    saveState();
   }
-  console.error(`  ✓ ${attachIds.length} inboxes attached (tag=${v.inbox_selection.tag}, LRU)`);
 
   // 6. Upload leads in batches
   let uploaded = 0;
