@@ -164,6 +164,7 @@ async function main() {
         r.company?.description || r.company?.description_ai || "",
     }));
     all.push(...results);
+    if (page % 5 === 0) writePartial(page); // checkpoint so a crash/rerun resumes instead of re-spending credits
     if (page % 10 === 0) console.error(`[Prospeo] Page ${page}: ${all.length} total leads`);
     if (results.length < 25) break;
     if (all.length >= maxLeads) break;
@@ -179,7 +180,12 @@ async function main() {
     out,
     JSON.stringify({ leads, stats: { total: leads.length, withEmail, withDesc } }, null, 2)
   );
+  rmSync(partialFile, { force: true });
   console.error(`\nWrote ${out} — ${leads.length} leads (${withEmail} with email, ${withDesc} with desc)`);
+  if (!leads.length) {
+    console.error("[Prospeo] No leads found — failing so the pipeline halts");
+    process.exit(1);
+  }
 }
 
 main().catch((e) => {
