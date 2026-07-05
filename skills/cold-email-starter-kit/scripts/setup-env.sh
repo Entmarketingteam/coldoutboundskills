@@ -2,13 +2,14 @@
 # Interactive .env bootstrap.
 # Usage: bash scripts/setup-env.sh
 
-set -e
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV_FILE=".env"
 if [ -f "$ENV_FILE" ]; then
-  echo ".env already exists. Edit it directly or delete it first."
-  exit 1
+  # Idempotent: an existing .env is a success state, not an error.
+  echo ".env already exists — nothing to do. Edit it directly if you need to change keys."
+  exit 0
 fi
 
 if [ -f ".env.example" ]; then
