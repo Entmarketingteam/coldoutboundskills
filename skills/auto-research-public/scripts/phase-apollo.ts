@@ -112,27 +112,31 @@ function buildApolloParams(filters: any, page: number) {
 
 async function searchPage(params: any): Promise<{ people: any[]; total: number }> {
   const { api_key, ...body } = params;
-  const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-cache",
-      "X-Api-Key": api_key as string,
+  // 429/5xx retried inside fetchWithRetry; throws after retries are exhausted
+  const resp = await fetchWithRetry(
+    `${APOLLO_BASE}/mixed_people/api_search`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "X-Api-Key": api_key as string,
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
+    "search"
+  );
 
-  if (resp.status === 429) {
-    console.error("[Apollo] Rate limited — waiting 10s");
-    await new Promise((r) => setTimeout(r, 10000));
-    return { people: [], total: 0 };
-  }
   if (!resp.ok) {
-    console.error(`[Apollo] ${resp.status}: ${await resp.text().catch(() => "")}`);
-    return { people: [], total: 0 };
+    throw new Error(`[Apollo] search ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 300)}`);
   }
 
-  const data = await resp.json();
+  let data: any;
+  try {
+    data = await resp.json();
+  } catch {
+    throw new Error("[Apollo] search: response was not valid JSON");
+  }
   return {
     people: data.people ?? [],
     total: data.pagination?.total_entries ?? 0,
