@@ -127,17 +127,14 @@ function parseIds(tokens: string[], source: string): Set<number> {
 }
 
 /**
- * Confirmation gate for bulk mutations.
- * --yes skips entirely; interactive TTY gets a countdown; non-TTY without --yes exits 1.
+ * Confirmation gate for idempotent bulk config mutations (warmup/signatures/tags).
+ * --yes skips the delay entirely; otherwise a short countdown runs and then the
+ * script proceeds — in both TTY and non-TTY mode — so documented commands stay
+ * runnable unattended. Truly destructive/spend operations should hard-require
+ * --yes instead of using this helper.
  */
 export async function confirmProceed(args: string[], summary: string, seconds = 3): Promise<void> {
   if (hasFlag(args, "--yes")) return;
-  if (!process.stdout.isTTY) {
-    console.error(
-      `Refusing to proceed without --yes in non-interactive mode: ${summary}. Re-run with --yes.`
-    );
-    process.exit(1);
-  }
   console.error(`${summary} — proceeding in ${seconds}s... (Ctrl+C to abort, or pass --yes to skip)`);
   await new Promise((r) => setTimeout(r, seconds * 1000));
 }

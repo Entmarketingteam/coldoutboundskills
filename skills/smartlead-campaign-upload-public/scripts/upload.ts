@@ -553,13 +553,24 @@ async function main() {
       await slPost(`/campaigns/${campaignId}/leads`, { lead_list: batch });
       uploaded += batch.length;
       process.stdout.write(`  ${uploaded}/${leads.length} leads uploaded\r`);
+      // Only advance the checkpoint while no batch has failed — otherwise a
+      // crash before step 9 would persist an offset past the failed batch and
+      // the rerun would silently skip those leads forever.
+      if (firstFailedAt === -1) {
+        state.leadsUploaded = i + batch.length;
+        saveState();
+      }
     } catch (err: any) {
       failedBatches.push(`${i}-${i + LEADS_BATCH}`);
-      if (firstFailedAt === -1) firstFailedAt = i;
+      if (firstFailedAt === -1) {
+        firstFailedAt = i;
+        // Pin the checkpoint at the first failed batch immediately so even a
+        // hard kill mid-loop leaves the state file pointing at the retry spot.
+        state.leadsUploaded = i;
+        saveState();
+      }
       console.error(`\n  ⚠ batch ${i}-${i + LEADS_BATCH} failed: ${err.message?.slice(0, 200)}`);
     }
-    state.leadsUploaded = i + batch.length;
-    saveState();
     await new Promise((r) => setTimeout(r, 300));
   }
   console.error(`\n  ✓ ${uploaded} leads uploaded`);
