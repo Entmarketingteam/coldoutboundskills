@@ -15,7 +15,7 @@
  *       reads existing tags, applies add/remove, and POSTs the new list.
  */
 
-import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency } from "./_lib";
+import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency, fetchJson, confirmProceed } from "./_lib.js";
 
 async function main() {
   const args = process.argv.slice(2);
