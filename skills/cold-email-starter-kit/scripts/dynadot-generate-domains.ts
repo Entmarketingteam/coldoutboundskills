@@ -29,8 +29,16 @@ async function checkBatch(domains: string[], apiKey: string): Promise<DomainCand
   url.searchParams.set("currency", "USD");
   domains.forEach((d, i) => url.searchParams.set(`domain${i}`, d));
 
-  const res = await retry(() => fetch(url.toString()).then(r => r.json() as Promise<any>));
-  const results = res?.SearchResponse?.SearchResults || [];
+  const res = await fetchJson<any>(url.toString());
+  const sr = res?.SearchResponse;
+  if (!sr) {
+    // JSON-bodied API error (bad key, non-whitelisted IP, ...) — surface it instead of returning [].
+    throw new Error(`Dynadot API error: ${res?.Response?.Error || res?.error || JSON.stringify(res).slice(0, 200)}`);
+  }
+  if (sr.ResponseCode !== undefined && Number(sr.ResponseCode) !== 0) {
+    throw new Error(`Dynadot search failed (code ${sr.ResponseCode}): ${sr.Error || JSON.stringify(sr).slice(0, 200)}`);
+  }
+  const results = sr.SearchResults || [];
   return results.map((r: any): DomainCandidate => ({
     domain: r.DomainName,
     available: r.Available || "no",
