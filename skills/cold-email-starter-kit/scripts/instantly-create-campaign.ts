@@ -119,7 +119,7 @@ async function main() {
     const created = await instantlyFetch("/api/v2/campaigns", {
       method: "POST",
       body: JSON.stringify(payload),
-    }, key);
+    }, key, { attempts: 1 });
     campaignId = created?.id;
     if (!campaignId) throw new Error(`Campaign create failed: ${JSON.stringify(created).slice(0, 300)}`);
     // Persist immediately so a mid-run crash can resume instead of creating a duplicate.
