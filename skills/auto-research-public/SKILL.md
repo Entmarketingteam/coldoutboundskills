@@ -153,8 +153,11 @@ npx tsx scripts/phase-upload.ts \
   --domain=<target.com> \
   --inboxes-tag=active \
   --inbox-count=10 \
-  --activate
+  --activate \
+  --yes
 ```
+
+Campaign creation is a spend operation, so the script asks for confirmation. `--yes` skips that prompt and is REQUIRED when the script runs non-interactively (e.g. Claude Code's Bash tool — stdin is not a TTY, so without `--yes` the script exits 1 with "Refusing to create/modify a campaign without confirmation in non-interactive mode"). Omit `--yes` only when running by hand and you want to review before the campaign is created.
 
 This script:
 1. Creates a new Smartlead campaign named `[AUTO] <date> <target> Auto`
