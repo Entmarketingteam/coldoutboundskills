@@ -272,15 +272,24 @@ async function main() {
     mvSkip = 0;
   if (MV_KEY) {
     console.error(`[Enrich] Validating ${withEmail.length} emails with MillionVerifier...`);
-    const mvResults = await pool(withEmail, enrichConcurrency, (l) => verifyEmail(l.email));
-    withEmail.forEach((l, i) => {
-      const result = mvResults[i];
+    const verifyTodo = withEmail.filter((l) => !(l.email in progress.verify));
+    if (verifyTodo.length < withEmail.length) {
+      console.error(`[Enrich] ${withEmail.length - verifyTodo.length} MV results loaded from checkpoint`);
+    }
+    await pool(verifyTodo, enrichConcurrency, async (l) => {
+      const result = await verifyEmail(l.email);
+      record("verify", l.email, result);
+      return result;
+    });
+    writeFileSync(progressFile, JSON.stringify(progress));
+    for (const l of withEmail) {
+      const result = progress.verify[l.email] ?? "skip";
       if (result === "ok") mvOk++;
       else if (result === "invalid") {
         mvInvalid++;
         l.email = ""; // clear invalid emails
       } else mvSkip++;
-    });
+    }
     console.error(`[Enrich] MV: ${mvOk} ok, ${mvInvalid} invalid, ${mvSkip} skip`);
   }
 
