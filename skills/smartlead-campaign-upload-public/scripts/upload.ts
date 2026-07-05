@@ -243,13 +243,26 @@ function parseScalar(s: string): YamlValue {
 
 // ---------- Smartlead API helpers ----------
 
+// Never let the API key (passed as a query param) leak into logs/errors.
+function sanitize(s: string): string {
+  return API_KEY ? s.split(API_KEY).join("***") : s;
+}
+
 async function slPost(path: string, body: any): Promise<any> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const resp = await fetch(`${API}${path}?api_key=${API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let resp: Response;
+    try {
+      resp = await fetch(`${API}${path}?api_key=${API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      console.error(`  [network error on POST ${path}: ${sanitize(String(err)).slice(0, 150)}] retrying...`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
     if (resp.status === 429 || resp.status >= 500) {
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       continue;
@@ -258,18 +271,44 @@ async function slPost(path: string, body: any): Promise<any> {
       const t = await resp.text().catch(() => "");
       throw new Error(`POST ${path} → ${resp.status}: ${t.slice(0, 300)}`);
     }
-    return resp.json();
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`POST ${path} → invalid JSON: ${text.slice(0, 200)}`);
+    }
   }
   throw new Error(`Exhausted retries for POST ${path}`);
 }
 
 async function slGet(path: string): Promise<any> {
-  const resp = await fetch(`${API}${path}${path.includes("?") ? "&" : "?"}api_key=${API_KEY}`);
-  if (!resp.ok) {
-    const t = await resp.text().catch(() => "");
-    throw new Error(`GET ${path} → ${resp.status}: ${t.slice(0, 200)}`);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(`${API}${path}${path.includes("?") ? "&" : "?"}api_key=${API_KEY}`, {
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      console.error(`  [network error on GET ${path}: ${sanitize(String(err)).slice(0, 150)}] retrying...`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
+    if (resp.status === 429 || resp.status >= 500) {
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => "");
+      throw new Error(`GET ${path} → ${resp.status}: ${t.slice(0, 200)}`);
+    }
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`GET ${path} → invalid JSON: ${text.slice(0, 200)}`);
+    }
   }
-  return resp.json();
+  throw new Error(`Exhausted retries for GET ${path}`);
 }
 
 async function listInboxes(): Promise<any[]> {
