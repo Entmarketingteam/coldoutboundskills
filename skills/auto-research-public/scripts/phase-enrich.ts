@@ -118,15 +118,31 @@ async function scrapeDescription(domain: string): Promise<string> {
 
 async function verifyEmail(email: string): Promise<"ok" | "invalid" | "skip"> {
   if (!MV_KEY) return "skip";
+  // never log the URL here — it contains the MV API key
   try {
-    const resp = await fetch(
-      `https://api.millionverifier.com/api/v3/?api=${MV_KEY}&email=${encodeURIComponent(email)}&timeout=10`
+    const resp = await fetchWithRetry(
+      `https://api.millionverifier.com/api/v3/?api=${MV_KEY}&email=${encodeURIComponent(email)}&timeout=10`,
+      {},
+      "[MV]",
+      15000
     );
     if (!resp.ok) return "skip";
-    const data = await resp.json();
+    let data: any;
+    try {
+      data = await resp.json();
+    } catch {
+      return "skip";
+    }
+    if (data.error) {
+      console.error(`[MV] API error: ${String(data.error).slice(0, 150)}`);
+      return "skip";
+    }
     const result = data.resultcode ?? data.result;
+    // account/API problems (no verdict at all) must not be treated as "invalid"
+    if (result === undefined || result === null) return "skip";
     return result === 1 || result === "ok" ? "ok" : "invalid";
-  } catch {
+  } catch (e: any) {
+    console.error(`[MV] request failed: ${(e?.message ?? String(e)).slice(0, 150)}`);
     return "skip";
   }
 }
