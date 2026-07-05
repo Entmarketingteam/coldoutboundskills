@@ -84,24 +84,65 @@ async function main() {
     console.error("Usage: --filters-file=path [--max-leads=1000] [--max-pages=40] [--out=path]");
     process.exit(1);
   }
-  const filters = JSON.parse(readFileSync(filtersFile, "utf8"));
+  let filters: any;
+  try {
+    filters = JSON.parse(readFileSync(filtersFile, "utf8"));
+  } catch (e: any) {
+    console.error(`Cannot read filters file ${filtersFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
 
-  const all: Lead[] = [];
+  // Resume from a partial checkpoint if a previous run crashed mid-pagination
+  const partialFile = `${out}.partial.json`;
+  let all: Lead[] = [];
+  let startPage = 1;
+  if (existsSync(partialFile)) {
+    try {
+      const partial = JSON.parse(readFileSync(partialFile, "utf8"));
+      all = partial.leads ?? [];
+      startPage = (partial.lastPage ?? 0) + 1;
+      console.error(`[Prospeo] Resuming from ${partialFile}: ${all.length} leads, page ${startPage}`);
+    } catch {
+      console.error(`[Prospeo] Ignoring unreadable checkpoint ${partialFile}`);
+    }
+  }
+  const writePartial = (lastPage: number) => {
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(partialFile, JSON.stringify({ lastPage, leads: all }));
+  };
+
   console.error(`[Prospeo] Searching up to ${maxPages} pages / ${maxLeads} leads...`);
 
-  for (let page = 1; page <= maxPages; page++) {
-    const resp = await fetch("https://api.prospeo.io/search-person", {
-      method: "POST",
-      headers: { "X-KEY": API_KEY!, "Content-Type": "application/json" },
-      body: JSON.stringify({ page, filters }),
-    });
-    const data = await resp.json();
+  for (let page = startPage; page <= maxPages; page++) {
+    const resp = await fetchWithRetry(
+      "https://api.prospeo.io/search-person",
+      {
+        method: "POST",
+        headers: { "X-KEY": API_KEY!, "Content-Type": "application/json" },
+        body: JSON.stringify({ page, filters }),
+      },
+      `search page ${page}`
+    );
+    if (!resp.ok) {
+      console.error(`[Prospeo] search ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 300)}`);
+      writePartial(page - 1);
+      process.exit(1);
+    }
+    let data: any;
+    try {
+      data = await resp.json();
+    } catch {
+      console.error("[Prospeo] search: response was not valid JSON");
+      writePartial(page - 1);
+      process.exit(1);
+    }
     if (page === 1) {
       console.error(`[Prospeo] Total available: ${data.pagination?.total_count ?? "?"}`);
     }
-    if (data.error_code === "INVALID_FILTERS") {
-      console.error(`[Prospeo] Filter error: ${data.filter_error || "unknown"}`);
-      break;
+    if (data.error || data.error_code) {
+      console.error(`[Prospeo] API error ${data.error_code ?? ""}: ${data.filter_error || data.message || data.error || "unknown"}`);
+      writePartial(page - 1);
+      process.exit(1);
     }
     const results: Lead[] = (data.results ?? []).map((r: any) => ({
       first_name: r.person?.first_name || "",
