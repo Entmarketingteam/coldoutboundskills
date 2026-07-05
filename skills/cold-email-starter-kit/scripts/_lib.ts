@@ -75,6 +75,19 @@ export function multiFlag(flags: Record<string, string | boolean>, key: string):
   return String(v).split("|");
 }
 
+// Parse a numeric flag with upfront validation: exits 1 with an actionable
+// message when the flag is present but not a number (e.g. `--limit` with no value).
+export function numFlag(flags: Record<string, string | boolean>, key: string, fallback?: number): number | undefined {
+  const v = flags[key];
+  if (v === undefined) return fallback;
+  const n = v === true ? NaN : Number(v);
+  if (Number.isNaN(n)) {
+    console.error(`Error: --${key} requires a number (e.g. --${key} ${fallback ?? 100}).`);
+    process.exit(1);
+  }
+  return n;
+}
+
 // ─────────────────────────────────────────────────────────
 // CSV (minimal, handles quoted fields)
 // ─────────────────────────────────────────────────────────
