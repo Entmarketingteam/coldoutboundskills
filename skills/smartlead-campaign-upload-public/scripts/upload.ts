@@ -373,10 +373,26 @@ function validateCsvSchema(headers: string[]): void {
 
 // ---------- main ----------
 
+// Checkpoint written next to the variants file so a failed run resumes instead
+// of creating a duplicate draft campaign and re-uploading leads from batch 0.
+interface UploadState {
+  name: string;
+  campaignId: number | string;
+  sequencesDone: boolean;
+  inboxesDone: boolean;
+  leadsUploaded: number; // offset of next lead batch to attempt
+  settingsDone: boolean;
+  scheduleDone: boolean;
+}
+
 async function main() {
   const args = parseArgs();
   if (!args.leads || !args.variants) {
-    console.error("Usage: --leads=<path> --variants=<path> [--client-id=X]");
+    console.error("Usage: --leads=<path> --variants=<path> [--client-id=X] [--yes]");
+    process.exit(1);
+  }
+  if (args.clientId && !/^\d+$/.test(args.clientId)) {
+    console.error(`--client-id must be numeric, got: ${args.clientId}`);
     process.exit(1);
   }
 
