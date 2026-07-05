@@ -179,8 +179,40 @@ async function main() {
     console.error("Usage: --leads-file=path [--out=path]");
     process.exit(1);
   }
-  const data = JSON.parse(readFileSync(leadsFile, "utf8"));
+  let data: any;
+  try {
+    data = JSON.parse(readFileSync(leadsFile, "utf8"));
+  } catch (e: any) {
+    console.error(`Cannot read leads file ${leadsFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
   const leads: any[] = data.leads || data;
+  if (!Array.isArray(leads) || !leads.length) {
+    console.error(`Leads file ${leadsFile} contains no leads`);
+    process.exit(1);
+  }
+
+  // Progress checkpoint: paid enrich/verify results are persisted so a crashed
+  // run resumes instead of re-spending Prospeo/MV credits from scratch.
+  mkdirSync(dirname(out), { recursive: true });
+  const progressFile = `${out}.progress.json`;
+  let progress: { enrich: Record<string, string>; verify: Record<string, string> } = { enrich: {}, verify: {} };
+  if (existsSync(progressFile)) {
+    try {
+      progress = JSON.parse(readFileSync(progressFile, "utf8"));
+      progress.enrich ??= {};
+      progress.verify ??= {};
+      console.error(`[Enrich] Resuming from ${progressFile}`);
+    } catch {
+      console.error(`[Enrich] Ignoring unreadable checkpoint ${progressFile}`);
+    }
+  }
+  let completedSinceSave = 0;
+  const record = (section: "enrich" | "verify", key: string, value: string) => {
+    progress[section][key] = value;
+    if (++completedSinceSave % 50 === 0) writeFileSync(progressFile, JSON.stringify(progress));
+  };
+  const keyOf = (l: any) => l.linkedin_url || `${l.first_name}|${l.last_name}|${l.company_domain}`;
 
   let alreadyHad = 0,
     enrichHits = 0,
@@ -190,16 +222,33 @@ async function main() {
   console.error(`[Enrich] Running email waterfall on ${leads.length} leads...`);
   const needEmail = leads.filter((l) => !l.email || !l.email.includes("@"));
   alreadyHad = leads.length - needEmail.length;
-  const enrichResults = await pool(needEmail, enrichConcurrency, (l) => enrichEmail(l));
-  needEmail.forEach((l, i) => {
-    if (enrichResults[i]) {
-      l.email = enrichResults[i];
-      enrichHits++;
-    } else {
-      enrichMisses++;
-    }
-  });
-  console.error(`[Enrich] Already had: ${alreadyHad}, Prospeo enrich hits: ${enrichHits}, misses: ${enrichMisses}`);
+  // Apply checkpointed results, only call the paid API for the rest
+  const enrichTodo = needEmail.filter((l) => !(keyOf(l) in progress.enrich));
+  for (const l of needEmail) {
+    const cached = progress.enrich[keyOf(l)];
+    if (cached) l.email = cached;
+  }
+  if (enrichTodo.length < needEmail.length) {
+    console.error(`[Enrich] ${needEmail.length - enrichTodo.length} enrich results loaded from checkpoint`);
+  }
+  const enrichFailures: string[] = [];
+  await pool(
+    enrichTodo,
+    enrichConcurrency,
+    async (l) => {
+      const email = await enrichEmail(l);
+      record("enrich", keyOf(l), email);
+      if (email) l.email = email;
+      return email;
+    },
+    enrichFailures
+  );
+  enrichHits = needEmail.filter((l) => l.email && l.email.includes("@")).length;
+  enrichMisses = needEmail.length - enrichHits - enrichFailures.length;
+  writeFileSync(progressFile, JSON.stringify(progress));
+  console.error(
+    `[Enrich] Already had: ${alreadyHad}, Prospeo enrich hits: ${enrichHits}, misses: ${enrichMisses}, failures: ${enrichFailures.length}`
+  );
 
   // 2. Description enrichment for leads with thin desc
   console.error(`[Enrich] Enriching thin company descriptions...`);
