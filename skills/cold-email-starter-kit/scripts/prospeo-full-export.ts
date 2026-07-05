@@ -203,18 +203,14 @@ async function main() {
     console.log();
   }
 
-  const trimmed = all.slice(0, limit);
+  // Dedupe the FULL collected set BEFORE trimming: slicing first would drop
+  // unique leads past index `limit` while duplicates inside the slice shrink
+  // the output below --limit.
+  const deduped = dedupeByEmail(all);
+  const trimmed = deduped.slice(0, limit);
 
-  // Dedupe by email
-  const seen = new Set<string>();
-  const deduped = trimmed.filter(r => {
-    if (!r.email || seen.has(r.email)) return false;
-    seen.add(r.email);
-    return true;
-  });
-
-  writeCsv(output, deduped);
-  console.log(`\n✅ Saved ${deduped.length} leads to ${output}`);
+  writeCsv(output, trimmed);
+  console.log(`\n✅ Saved ${trimmed.length} leads to ${output}`);
 
   if (failures.length > 0) {
     fs.writeFileSync(checkpointPath, JSON.stringify({ filtersKey, lastPage, doneStates: Array.from(doneStates) }));
