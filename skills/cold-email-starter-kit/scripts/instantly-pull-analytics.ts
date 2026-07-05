@@ -8,11 +8,12 @@ const API = "https://api.instantly.ai";
 
 async function main() {
   const { flags } = parseArgs();
-  const campaignId = flags["campaign-id"] as string;
+  const campaignId = flags["campaign-id"];
   const since = (flags.since as string) || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const until = (flags.until as string) || new Date().toISOString().slice(0, 10);
   const output = (flags.output as string) || "analytics.csv";
-  if (!campaignId || campaignId === "true") { console.error("Usage: --campaign-id <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD]"); process.exit(1); }
+  // A bare `--campaign-id` (no value) parses as boolean true — reject anything non-string.
+  if (typeof campaignId !== "string") { console.error("Usage: --campaign-id <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD]"); process.exit(1); }
 
   const key = required("INSTANTLY_API_KEY");
 
