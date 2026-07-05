@@ -115,6 +115,12 @@ async function main() {
   writeCsv(outPath, available);
   console.log(`\nSaved to ${outPath}`);
 
+  if (failedBatches.length > 0) {
+    console.error(`\n⚠️  ${failedBatches.length} availability batch(es) failed — results are partial:`);
+    failedBatches.forEach(f => console.error(`  ${f}`));
+    process.exit(1);
+  }
+
   if (checkOnly) {
     console.log("(--check-only mode, no purchase)");
     return;
