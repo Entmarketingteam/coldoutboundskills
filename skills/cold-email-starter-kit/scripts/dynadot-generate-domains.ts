@@ -49,10 +49,10 @@ async function checkBatch(domains: string[], apiKey: string): Promise<DomainCand
 async function main() {
   const { flags } = parseArgs();
   const brand = (flags.brand as string) || "";
-  const count = parseInt((flags.count as string) || "20");
+  const count = numFlag(flags, "count", 20)!;
   const tld = (flags.tld as string) || "info";
   const checkOnly = !!flags["check-only"];
-  const maxPrice = parseFloat((flags["max-price"] as string) || "3.5");
+  const maxPrice = numFlag(flags, "max-price", 3.5)!;
 
   if (!brand) {
     console.error("Usage: --brand <keyword> [--count 20] [--tld info] [--max-price 3.5] [--check-only]");
