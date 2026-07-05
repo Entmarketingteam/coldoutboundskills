@@ -47,22 +47,51 @@ export interface InboxAccount {
   [key: string]: any;
 }
 
+/** Strip the API key from any string destined for logs/errors. */
+function redact(s: string): string {
+  return API_KEY ? s.split(API_KEY).join("***") : s;
+}
+
 export async function fetchJson(url: string, options?: RequestInit): Promise<any> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const resp = await fetch(url, options);
+  const maxAttempts = 5;
+  let lastDetail = "";
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url, { ...options, signal: AbortSignal.timeout(30_000) });
+    } catch (err) {
+      // Network error / timeout — retry like a transient 5xx.
+      lastDetail = `network error: ${redact(String(err)).slice(0, 200)}`;
+      if (attempt < maxAttempts - 1) {
+        const wait = 1000 * 2 ** attempt;
+        console.error(`  [network] retry ${attempt + 1}/${maxAttempts} in ${wait}ms (${lastDetail})`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      break;
+    }
     if (resp.status === 429 || resp.status >= 500) {
+      const body = await resp.text().catch(() => "");
+      lastDetail = `HTTP ${resp.status}: ${redact(body).slice(0, 200)}`;
       const wait = 1000 * 2 ** attempt;
-      console.error(`  [${resp.status}] retry ${attempt + 1}/5 in ${wait}ms`);
+      console.error(`  [${resp.status}] retry ${attempt + 1}/${maxAttempts} in ${wait}ms`);
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
+    const text = await resp.text().catch(() => "");
     if (!resp.ok) {
-      const body = await resp.text().catch(() => "");
-      throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      throw new Error(`HTTP ${resp.status}: ${redact(text).slice(0, 200)}`);
     }
-    return resp.json();
+    if (!text.trim()) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Invalid JSON from Smartlead (HTTP ${resp.status}): ${redact(text).slice(0, 200)}`
+      );
+    }
   }
-  throw new Error("Exhausted retries");
+  throw new Error(`Exhausted retries (last: ${lastDetail || "no response detail"})`);
 }
 
 export async function listAllInboxes(): Promise<InboxAccount[]> {
