@@ -11,8 +11,10 @@ const API = "https://api.instantly.ai";
 
 const STATE_FILE = ".instantly-campaign.json";
 
-async function instantlyFetch(path: string, init: RequestInit = {}, key: string): Promise<any> {
+async function instantlyFetch(path: string, init: RequestInit = {}, key: string, opts: { attempts?: number } = {}): Promise<any> {
   // fetchJson retries 429/5xx with backoff, fails fast on other 4xx (with body detail), and times out.
+  // Pass opts.attempts=1 for non-idempotent calls (campaign create) so a post-commit
+  // timeout/5xx isn't retried into a duplicate.
   return fetchJson(`${API}${path}`, {
     ...init,
     headers: {
@@ -20,7 +22,7 @@ async function instantlyFetch(path: string, init: RequestInit = {}, key: string)
       "Content-Type": "application/json",
       ...(init.headers as any),
     },
-  });
+  }, opts);
 }
 
 async function fetchAllAccounts(key: string): Promise<string[]> {
