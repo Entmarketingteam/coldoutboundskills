@@ -419,6 +419,7 @@ async function main() {
     inboxes_assigned: inboxes,
     variants,
     lead_count_uploaded: uploaded,
+    failed_batches: failedBatches,
     launched_at: new Date().toISOString(),
     status: args.activate ? "launched" : "draft",
   };
@@ -428,7 +429,15 @@ async function main() {
     console.error(`  Wrote experiment log to ${args.experimentLog}`);
   }
 
-  console.log(JSON.stringify({ campaignId, inboxCount: inboxes.length, leadsUploaded: uploaded }));
+  console.log(
+    JSON.stringify({ campaignId, inboxCount: inboxes.length, leadsUploaded: uploaded, failedBatches })
+  );
+  if (failedBatches.length) {
+    // keep the state file so a rerun retries only the failed batches
+    console.error(`  Upload was partial (${failedBatches.length} failed batches) — exiting nonzero`);
+    process.exit(1);
+  }
+  rmSync(stateFile, { force: true });
 }
 
 main().catch((e) => {
