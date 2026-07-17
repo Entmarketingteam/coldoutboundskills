@@ -2,28 +2,33 @@
 // Pull Smartlead analytics to CSV.
 // Run: npx tsx scripts/smartlead-pull-analytics.ts --campaign-id 12345
 
-import { env, required, parseArgs, writeCsv, retry } from "./_lib.ts";
+import { required, parseArgs, writeCsv, fetchJson } from "./_lib.ts";
 
 const API = "https://server.smartlead.ai/api/v1";
 
 async function main() {
   const { flags } = parseArgs();
-  const campaignId = flags["campaign-id"] as string;
+  const campaignId = flags["campaign-id"];
   const since = (flags.since as string) || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const until = (flags.until as string) || new Date().toISOString().slice(0, 10);
   const output = (flags.output as string) || "analytics.csv";
 
-  if (!campaignId) { console.error("Usage: --campaign-id <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD]"); process.exit(1); }
+  // A bare `--campaign-id` (no value) parses as boolean true — reject anything non-string.
+  if (typeof campaignId !== "string") { console.error("Usage: --campaign-id <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD]"); process.exit(1); }
 
   const key = required("SMARTLEAD_API_KEY");
 
   console.log(`Pulling Smartlead analytics for campaign ${campaignId}, ${since} → ${until}...`);
 
+  // fetchJson retries 429/5xx with backoff, fails fast on other 4xx (with status + body detail,
+  // never the URL — which carries api_key), guards JSON parsing, and times out. No silent
+  // all-zero "success" on a bad key or campaign id.
+
   // Overall stats
-  const overall = await retry(() => fetch(`${API}/campaigns/${campaignId}/analytics?api_key=${key}`).then(r => r.json() as Promise<any>));
+  const overall: any = await fetchJson(`${API}/campaigns/${campaignId}/analytics?api_key=${key}`);
 
   // By-date stats
-  const byDate = await retry(() => fetch(`${API}/campaigns/${campaignId}/analytics-by-date?api_key=${key}&start_date=${since}&end_date=${until}`).then(r => r.json() as Promise<any>));
+  const byDate: any = await fetchJson(`${API}/campaigns/${campaignId}/analytics-by-date?api_key=${key}&start_date=${since}&end_date=${until}`);
 
   // Print summary
   console.log("\nOverall stats:");

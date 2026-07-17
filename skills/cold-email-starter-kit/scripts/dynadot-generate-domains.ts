@@ -4,7 +4,7 @@
 //
 // Outputs: generated-domains.csv in the skill root with columns: domain, available, price
 
-import { env, required, parseArgs, writeCsv, sleep, retry } from "./_lib.ts";
+import { env, required, parseArgs, writeCsv, sleep, fetchJson, numFlag } from "./_lib.ts";
 
 const PREFIXES = [
   "go", "get", "try", "my", "the", "hey", "use", "run", "hello",
@@ -29,8 +29,16 @@ async function checkBatch(domains: string[], apiKey: string): Promise<DomainCand
   url.searchParams.set("currency", "USD");
   domains.forEach((d, i) => url.searchParams.set(`domain${i}`, d));
 
-  const res = await retry(() => fetch(url.toString()).then(r => r.json() as Promise<any>));
-  const results = res?.SearchResponse?.SearchResults || [];
+  const res = await fetchJson<any>(url.toString());
+  const sr = res?.SearchResponse;
+  if (!sr) {
+    // JSON-bodied API error (bad key, non-whitelisted IP, ...) — surface it instead of returning [].
+    throw new Error(`Dynadot API error: ${res?.Response?.Error || res?.error || JSON.stringify(res).slice(0, 200)}`);
+  }
+  if (sr.ResponseCode !== undefined && Number(sr.ResponseCode) !== 0) {
+    throw new Error(`Dynadot search failed (code ${sr.ResponseCode}): ${sr.Error || JSON.stringify(sr).slice(0, 200)}`);
+  }
+  const results = sr.SearchResults || [];
   return results.map((r: any): DomainCandidate => ({
     domain: r.DomainName,
     available: r.Available || "no",
@@ -41,10 +49,10 @@ async function checkBatch(domains: string[], apiKey: string): Promise<DomainCand
 async function main() {
   const { flags } = parseArgs();
   const brand = (flags.brand as string) || "";
-  const count = parseInt((flags.count as string) || "20");
+  const count = numFlag(flags, "count", 20)!;
   const tld = (flags.tld as string) || "info";
   const checkOnly = !!flags["check-only"];
-  const maxPrice = parseFloat((flags["max-price"] as string) || "3.5");
+  const maxPrice = numFlag(flags, "max-price", 3.5)!;
 
   if (!brand) {
     console.error("Usage: --brand <keyword> [--count 20] [--tld info] [--max-price 3.5] [--check-only]");
@@ -63,6 +71,7 @@ async function main() {
   console.log(`Checking availability on Dynadot (batches of 100)...\n`);
 
   const allResults: DomainCandidate[] = [];
+  const failedBatches: string[] = [];
   for (let i = 0; i < brandSuffix.length; i += 100) {
     const batch = brandSuffix.slice(i, i + 100);
     try {
@@ -70,7 +79,8 @@ async function main() {
       allResults.push(...results);
       process.stdout.write(`Checked ${Math.min(i + 100, brandSuffix.length)}/${brandSuffix.length}\r`);
     } catch (e: any) {
-      console.error(`\nBatch failed: ${e.message}`);
+      console.error(`\nBatch ${i / 100 + 1} failed: ${e.message}`);
+      failedBatches.push(`batch ${i / 100 + 1} (${batch.length} domains): ${e.message}`);
     }
     await sleep(1000);
   }
@@ -83,8 +93,13 @@ async function main() {
     .slice(0, count);
 
   if (available.length === 0) {
-    console.log(`No available domains found under $${maxPrice} for .${tld}.`);
-    console.log("Try a different brand keyword or increase --max-price.");
+    if (failedBatches.length > 0) {
+      console.error(`No available domains found — but ${failedBatches.length} availability check(s) failed:`);
+      failedBatches.forEach(f => console.error(`  ${f}`));
+    } else {
+      console.log(`No available domains found under $${maxPrice} for .${tld}.`);
+      console.log("Try a different brand keyword or increase --max-price.");
+    }
     process.exit(1);
   }
 
@@ -99,6 +114,12 @@ async function main() {
   const outPath = "generated-domains.csv";
   writeCsv(outPath, available);
   console.log(`\nSaved to ${outPath}`);
+
+  if (failedBatches.length > 0) {
+    console.error(`\n⚠️  ${failedBatches.length} availability batch(es) failed — results are partial:`);
+    failedBatches.forEach(f => console.error(`  ${f}`));
+    process.exit(1);
+  }
 
   if (checkOnly) {
     console.log("(--check-only mode, no purchase)");

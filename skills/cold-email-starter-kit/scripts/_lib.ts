@@ -75,16 +75,32 @@ export function multiFlag(flags: Record<string, string | boolean>, key: string):
   return String(v).split("|");
 }
 
+// Parse a numeric flag with upfront validation: exits 1 with an actionable
+// message when the flag is present but not a number (e.g. `--limit` with no value).
+export function numFlag(flags: Record<string, string | boolean>, key: string, fallback?: number): number | undefined {
+  const v = flags[key];
+  if (v === undefined) return fallback;
+  const n = v === true ? NaN : Number(v);
+  if (Number.isNaN(n)) {
+    console.error(`Error: --${key} requires a number (e.g. --${key} ${fallback ?? 100}).`);
+    process.exit(1);
+  }
+  return n;
+}
+
 // ─────────────────────────────────────────────────────────
 // CSV (minimal, handles quoted fields)
 // ─────────────────────────────────────────────────────────
 export function readCsv(filepath: string): Record<string, string>[] {
-  const raw = fs.readFileSync(filepath, "utf8");
-  const lines = raw.split(/\r?\n/).filter(l => l.length > 0);
+  if (!fs.existsSync(filepath)) {
+    throw new Error(`CSV file not found: ${filepath}`);
+  }
+  let raw = fs.readFileSync(filepath, "utf8");
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // strip UTF-8 BOM
+  const lines = parseCsvText(raw);
   if (lines.length === 0) return [];
-  const headers = parseCsvLine(lines[0]);
-  return lines.slice(1).map(line => {
-    const values = parseCsvLine(line);
+  const headers = lines[0];
+  return lines.slice(1).map(values => {
     const row: Record<string, string> = {};
     headers.forEach((h, i) => { row[h] = values[i] ?? ""; });
     return row;
@@ -96,7 +112,9 @@ export function writeCsv(filepath: string, rows: Record<string, any>[]): void {
     fs.writeFileSync(filepath, "");
     return;
   }
-  const headers = Array.from(rows.reduce((s, r) => { Object.keys(r).forEach(k => s.add(k)); return s; }, new Set<string>()));
+  const headerSet = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r)) headerSet.add(k);
+  const headers = Array.from(headerSet);
   const out: string[] = [headers.join(",")];
   for (const r of rows) {
     out.push(headers.map(h => escapeCsv(r[h])).join(","));
@@ -104,24 +122,36 @@ export function writeCsv(filepath: string, rows: Record<string, any>[]): void {
   fs.writeFileSync(filepath, out.join("\n") + "\n");
 }
 
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
+// Quote-aware full-file CSV parser: handles quoted fields containing
+// commas, escaped quotes, and embedded newlines (which writeCsv legally emits).
+function parseCsvText(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
   let cur = "";
   let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
     if (inQuote) {
-      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; }
       else if (c === '"') { inQuote = false; }
       else { cur += c; }
     } else {
       if (c === '"') { inQuote = true; }
-      else if (c === ",") { out.push(cur); cur = ""; }
+      else if (c === ",") { row.push(cur); cur = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(cur); cur = "";
+        if (!(row.length === 1 && row[0] === "")) rows.push(row); // skip blank lines
+        row = [];
+      }
       else { cur += c; }
     }
   }
-  out.push(cur);
-  return out;
+  if (cur.length > 0 || row.length > 0) {
+    row.push(cur);
+    if (!(row.length === 1 && row[0] === "")) rows.push(row);
+  }
+  return rows;
 }
 
 function escapeCsv(v: any): string {
@@ -145,10 +175,63 @@ export async function retry<T>(fn: () => Promise<T>, opts: { attempts?: number; 
     try { return await fn(); } catch (e: any) {
       lastErr = e;
       onAttemptError?.(e, i);
-      await sleep(Math.min(baseDelayMs * Math.pow(2, i), 30000));
+      // Fail fast on errors explicitly marked non-retryable (e.g. 4xx auth/validation),
+      // and don't waste a backoff sleep after the final attempt.
+      if (e?.retryable === false || i === attempts - 1) break;
+      await sleep(Math.min(baseDelayMs * Math.pow(2, i) + Math.random() * 250, 30000));
     }
   }
   throw lastErr;
+}
+
+// ─────────────────────────────────────────────────────────
+// HTTP (timeout + retry + error-body detail, secrets redacted)
+// ─────────────────────────────────────────────────────────
+
+// Replace any configured secret values (env vars named *KEY/TOKEN/SECRET/PASSWORD*)
+// with *** so error output never leaks credentials.
+export function redactSecrets(s: string): string {
+  let out = s;
+  for (const [k, v] of Object.entries(env)) {
+    if (!v || v.length < 8) continue;
+    if (!/KEY|TOKEN|SECRET|PASSWORD/i.test(k)) continue;
+    out = out.split(v).join("***");
+  }
+  return out;
+}
+
+// fetch + JSON parse with:
+// - AbortSignal timeout (default 30s)
+// - bounded retry with exponential backoff on 429/5xx and network/timeout errors
+// - fail-fast on other 4xx (marked retryable: false)
+// - error messages include HTTP status + redacted body snippet, never the full URL
+export async function fetchJson<T = any>(url: string, init: RequestInit = {}, opts: { timeoutMs?: number; attempts?: number; baseDelayMs?: number } = {}): Promise<T> {
+  const { timeoutMs = 30000, attempts, baseDelayMs } = opts;
+  const host = new URL(url).host;
+  return retry(async () => {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (e: any) {
+      // network error / timeout — retryable
+      throw new Error(`Network error calling ${host}: ${redactSecrets(String(e?.message || e))}`);
+    }
+    const text = await res.text();
+    if (!res.ok) {
+      const err: any = new Error(`HTTP ${res.status} from ${host}: ${redactSecrets(text.slice(0, 300))}`);
+      err.status = res.status;
+      err.retryable = res.status === 429 || res.status >= 500;
+      throw err;
+    }
+    if (text.trim() === "") return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      const err: any = new Error(`Invalid JSON from ${host} (HTTP ${res.status}): ${redactSecrets(text.slice(0, 200))}`);
+      err.retryable = false;
+      throw err;
+    }
+  }, { attempts, baseDelayMs });
 }
 
 // simple p-queue replacement (concurrency limiter)
@@ -178,6 +261,10 @@ export function createQueue(concurrency: number) {
 // Terminal
 // ─────────────────────────────────────────────────────────
 export async function confirm(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    console.error("Non-interactive session: re-run with --yes to proceed.");
+    return false;
+  }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise(resolve => {
     rl.question(`${question} `, answer => {

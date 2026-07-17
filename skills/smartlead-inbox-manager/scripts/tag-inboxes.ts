@@ -15,7 +15,7 @@
  *       reads existing tags, applies add/remove, and POSTs the new list.
  */
 
-import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency } from "./_lib";
+import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency, fetchJson, confirmProceed } from "./_lib.js";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -40,17 +40,17 @@ async function main() {
   if (!inboxes.length) return;
 
   console.error(`Actions: add=${addName ?? "-"} (${addColor})  remove=${removeTagArg ?? "-"}`);
-  console.error(`Proceeding in 3s...`);
-  await new Promise((r) => setTimeout(r, 3000));
+  await confirmProceed(args, `Updating tags on ${inboxes.length} inboxes`, 3);
 
   let ok = 0;
   let fail = 0;
+  const failedIds: number[] = [];
   await runWithConcurrency(inboxes, 5, async (inbox, i) => {
     const existing = inbox.tags ?? [];
-    let newTags = existing
-      .filter((t: any) => t.name !== removeTagArg)
-      .map((t: any) => ({ id: t.id, name: t.name, color: t.color }));
-    if (addName && !newTags.some((t: any) => t.name === addName)) {
+    let newTags: { id?: number; name: string; color?: string }[] = existing
+      .filter((t) => t.name !== removeTagArg)
+      .map((t) => ({ id: t.id, name: t.name, color: t.color }));
+    if (addName && !newTags.some((t) => t.name === addName)) {
       newTags.push({ name: addName, color: addColor });
     }
     const url = `${API_BASE}/email-accounts/tag?api_key=${API_KEY}`;
@@ -59,24 +59,25 @@ async function main() {
       tags: newTags,
     };
     try {
-      const resp = await fetch(url, {
+      await fetchJson(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!resp.ok) {
-        const t = await resp.text().catch(() => "");
-        throw new Error(`${resp.status}: ${t.slice(0, 120)}`);
-      }
       ok++;
       if ((i + 1) % 20 === 0) console.error(`  ${i + 1}/${inboxes.length} processed`);
     } catch (err) {
       fail++;
+      failedIds.push(inbox.id);
       console.error(`  [${inbox.id}]: ${String(err).slice(0, 200)}`);
     }
   });
 
   console.error(`\nDone. ${ok} updated, ${fail} failed.`);
+  if (fail > 0) {
+    console.error(`Failed ids (retry with --ids=...): ${failedIds.join(",")}`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch((e) => {

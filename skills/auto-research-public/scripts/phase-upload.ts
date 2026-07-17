@@ -17,8 +17,9 @@
  *     --activate
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "fs";
 import { dirname } from "path";
+import readline from "readline";
 
 const SL_BASE = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
@@ -34,39 +35,104 @@ function parseArgs() {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
     return arg ? arg.split("=").slice(1).join("=") : undefined;
   };
+  const inboxCount = Number(get("--inbox-count") ?? 10);
+  if (!Number.isInteger(inboxCount) || inboxCount < 1) {
+    console.error("--inbox-count must be a positive integer");
+    process.exit(1);
+  }
+  const clientId = get("--client-id");
+  if (clientId !== undefined && !Number.isInteger(Number(clientId))) {
+    console.error("--client-id must be an integer");
+    process.exit(1);
+  }
+  const inboxIds = get("--inbox-ids")?.split(",").map(Number); // explicit inbox IDs
+  if (inboxIds?.some((n) => !Number.isInteger(n))) {
+    console.error("--inbox-ids must be a comma-separated list of integers");
+    process.exit(1);
+  }
   return {
     leadsFile: get("--leads-file"),
     variantsFile: get("--variants-file"),
     domain: get("--domain"),
     inboxTag: get("--inboxes-tag") ?? "active",
     inboxDomain: get("--inbox-domain"), // fallback: filter by email domain substring
-    inboxIds: get("--inbox-ids")?.split(",").map(Number), // explicit inbox IDs
-    inboxCount: Number(get("--inbox-count") ?? 10),
-    clientId: get("--client-id"),
+    inboxIds,
+    inboxCount,
+    clientId,
     experimentLog: get("--experiment-log"),
     activate: args.includes("--activate"),
+    yes: args.includes("--yes"),
   };
 }
 
-async function slGet(path: string, params: Record<string, any> = {}): Promise<any> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function confirmPrompt(question: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question(`${question} `, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase().startsWith("y"));
+    });
+  });
+}
+
+// Bounded retry with exponential backoff on 429/5xx/network errors
+// (pattern from cold-email-starter-kit/scripts/_lib.ts retry()).
+// Never include the full URL in errors — the API key lives in the query string.
+async function slFetch(method: "GET" | "POST", path: string, params: Record<string, any>, body?: any): Promise<any> {
   const url = new URL(SL_BASE + path);
   url.searchParams.set("api_key", API_KEY!);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const resp = await fetch(url.toString());
-  if (!resp.ok) throw new Error(`GET ${path}: ${resp.status} ${await resp.text().catch(() => "")}`);
-  return resp.json();
+  const attempts = 5;
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url.toString(), {
+        method,
+        ...(body !== undefined
+          ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+          : {}),
+        signal: AbortSignal.timeout(60000),
+      });
+    } catch (e: any) {
+      lastErr = new Error(`${method} ${path}: ${e?.message ?? e}`);
+      // POST is non-idempotent: a network/timeout error may hit after a server-side
+      // commit, so retrying could duplicate the resource. Only GET retries here.
+      if (method === "GET" && i < attempts - 1) {
+        console.error(`  [SL] ${method} ${path} attempt ${i + 1}/${attempts} failed — retrying`);
+        await sleep(Math.min(1000 * 2 ** i, 30000));
+        continue;
+      }
+      throw lastErr;
+    }
+    if (resp.status === 429 || resp.status >= 500) {
+      lastErr = new Error(`${method} ${path}: ${resp.status} ${(await resp.text().catch(() => "")).slice(0, 200)}`);
+      // 429 is safe to retry for any method (nothing committed). A 5xx on a POST may
+      // follow a server-side commit, so only GET retries on 5xx.
+      const retryable = resp.status === 429 || method === "GET";
+      if (retryable && i < attempts - 1) {
+        console.error(`  [SL] ${method} ${path} got ${resp.status} — retrying`);
+        await sleep(Math.min(1000 * 2 ** i, 30000));
+        continue;
+      }
+      throw lastErr;
+    }
+    if (!resp.ok) throw new Error(`${method} ${path}: ${resp.status} ${await resp.text().catch(() => "")}`);
+    try {
+      return await resp.json();
+    } catch {
+      throw new Error(`${method} ${path}: response was not valid JSON`);
+    }
+  }
+  throw lastErr;
+}
+async function slGet(path: string, params: Record<string, any> = {}): Promise<any> {
+  return slFetch("GET", path, params);
 }
 async function slPost(path: string, body: any, params: Record<string, any> = {}): Promise<any> {
-  const url = new URL(SL_BASE + path);
-  url.searchParams.set("api_key", API_KEY!);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const resp = await fetch(url.toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error(`POST ${path}: ${resp.status} ${await resp.text().catch(() => "")}`);
-  return resp.json();
+  return slFetch("POST", path, params, body);
 }
 
 async function selectInboxes(
@@ -131,60 +197,153 @@ async function main() {
     process.exit(1);
   }
 
-  const leads: any[] = JSON.parse(readFileSync(args.leadsFile, "utf8"));
-  const variants: any[] = JSON.parse(readFileSync(args.variantsFile, "utf8"));
+  // Validate all inputs BEFORE any Smartlead mutation
+  let leadsRaw: any, variantsRaw: any;
+  try {
+    leadsRaw = JSON.parse(readFileSync(args.leadsFile, "utf8"));
+  } catch (e: any) {
+    console.error(`Cannot read leads file ${args.leadsFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
+  try {
+    variantsRaw = JSON.parse(readFileSync(args.variantsFile, "utf8"));
+  } catch (e: any) {
+    console.error(`Cannot read variants file ${args.variantsFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
+  const leads: any[] = Array.isArray(leadsRaw) ? leadsRaw : leadsRaw?.leads;
+  const variants: any[] = Array.isArray(variantsRaw) ? variantsRaw : variantsRaw?.variants;
+  if (!Array.isArray(leads) || !leads.length) {
+    console.error(`Leads file ${args.leadsFile} must be a non-empty array (or { leads: [...] })`);
+    process.exit(1);
+  }
+  if (!Array.isArray(variants) || !variants.length) {
+    console.error(`Variants file ${args.variantsFile} must be a non-empty array (or { variants: [...] })`);
+    process.exit(1);
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   const campaignName = `[AUTO] ${today} ${args.domain}`;
 
-  console.error(`\n[Launch] Creating campaign: ${campaignName}`);
-  console.error(`  Leads: ${leads.length} | Variants: ${variants.length}`);
-
-  // 1. Create campaign
-  const createBody: any = { name: campaignName };
-  if (args.clientId) createBody.client_id = Number(args.clientId);
-  const campaign = await slPost("/campaigns/create", createBody);
-  const campaignId = campaign.id;
-  console.error(`  Campaign created: #${campaignId}`);
-
-  // 2. Save sequences with A/B/C variants
-  await slPost(`/campaigns/${campaignId}/sequences`, {
-    sequences: [
-      {
-        seq_number: 1,
-        seq_delay_details: { delay_in_days: 0 },
-        seq_variants: variants.map((v: any) => ({
-          variant_label: v.variant,
-          subject: (v.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
-          email_body: buildBody(v.variant, campaignId, v.body_template),
-        })),
-      },
-    ],
-  });
-  console.error(`  Saved ${variants.length} variants`);
-
-  // 3. Select + add inboxes
-  const inboxes = await selectInboxes(args.inboxTag, args.inboxCount, args.inboxDomain, args.inboxIds);
-  if (!inboxes.length) throw new Error(`No inboxes matching tag=${args.inboxTag}`);
-  let remainingIds = inboxes.map((i) => i.id);
-  let retries = 0;
-  while (remainingIds.length && retries < 50) {
+  // Resumable state: a rerun completes the same campaign instead of duplicating it
+  const stateFile = args.experimentLog
+    ? `${args.experimentLog}.state.json`
+    : `/tmp/auto/upload-state-${today}-${args.domain}.json`;
+  interface UploadState {
+    campaignId?: number;
+    steps: string[];
+    uploadedBatches: number[];
+    uploadedLeads: number;
+    inboxes?: { id: number; email: string }[];
+  }
+  let state: UploadState = { steps: [], uploadedBatches: [], uploadedLeads: 0 };
+  if (existsSync(stateFile)) {
     try {
-      await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: remainingIds });
-      break;
-    } catch (err: any) {
-      const m = err.message?.match(/Email account id - (\d+) not allowed/);
-      if (m) {
-        const bad = Number(m[1]);
-        remainingIds = remainingIds.filter((id) => id !== bad);
-        retries++;
-      } else throw err;
+      state = { steps: [], uploadedBatches: [], uploadedLeads: 0, ...JSON.parse(readFileSync(stateFile, "utf8")) };
+    } catch {
+      console.error(`[Launch] Ignoring unreadable state file ${stateFile}`);
     }
   }
-  console.error(`  Added ${remainingIds.length} inboxes (${retries} rejected)`);
+  const saveState = () => {
+    mkdirSync(dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  };
+  const done = (step: string) => state.steps.includes(step);
+  const markDone = (step: string) => {
+    state.steps.push(step);
+    saveState();
+  };
 
-  // 4. Upload leads in batches of 100
-  let uploaded = 0;
+  // Spend confirmation: campaign creation (and possible activation) needs --yes when unattended
+  console.error(`\n[Launch] Campaign: ${campaignName}`);
+  console.error(`  Leads: ${leads.length} | Variants: ${variants.length}`);
+  console.error(
+    `  Inboxes: ${args.inboxIds?.length ? `ids=${args.inboxIds.join(",")}` : `tag='${args.inboxTag}'`} (count=${args.inboxCount})`
+  );
+  console.error(`  Activate after upload: ${args.activate ? "YES (live sending)" : "no (draft)"}`);
+  if (state.campaignId) console.error(`  Resuming existing campaign #${state.campaignId} from ${stateFile}`);
+  if (!args.yes) {
+    if (!process.stdin.isTTY) {
+      console.error("Refusing to create/modify a campaign without confirmation in non-interactive mode. Pass --yes to proceed.");
+      process.exit(1);
+    }
+    const ok = await confirmPrompt("Proceed? [y/N]");
+    if (!ok) {
+      console.error("Aborted.");
+      process.exit(1);
+    }
+  }
+
+  // 1. Create campaign (skipped when resuming)
+  let campaignId: number;
+  if (state.campaignId) {
+    campaignId = state.campaignId;
+  } else {
+    const createBody: any = { name: campaignName };
+    if (args.clientId) createBody.client_id = Number(args.clientId);
+    const campaign = await slPost("/campaigns/create", createBody);
+    campaignId = campaign.id;
+    state.campaignId = campaignId;
+    saveState();
+    console.error(`  Campaign created: #${campaignId}`);
+  }
+
+  // 2. Save sequences with A/B/C variants
+  if (!done("sequences")) {
+    await slPost(`/campaigns/${campaignId}/sequences`, {
+      sequences: [
+        {
+          seq_number: 1,
+          seq_delay_details: { delay_in_days: 0 },
+          seq_variants: variants.map((v: any) => ({
+            variant_label: v.variant,
+            subject: (v.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
+            email_body: buildBody(v.variant, campaignId, v.body_template),
+          })),
+        },
+      ],
+    });
+    markDone("sequences");
+    console.error(`  Saved ${variants.length} variants`);
+  }
+
+  // 3. Select + add inboxes (skipped when resuming past this step)
+  let inboxes: { id: number; email: string }[] = state.inboxes ?? [];
+  if (!done("inboxes")) {
+    inboxes = await selectInboxes(args.inboxTag, args.inboxCount, args.inboxDomain, args.inboxIds);
+    if (!inboxes.length) throw new Error(`No inboxes matching tag=${args.inboxTag}`);
+    let remainingIds = inboxes.map((i) => i.id);
+    let retries = 0;
+    let attached = false;
+    while (remainingIds.length && retries < 50) {
+      try {
+        await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: remainingIds });
+        attached = true;
+        break;
+      } catch (err: any) {
+        const m = err.message?.match(/Email account id - (\d+) not allowed/);
+        if (m) {
+          const bad = Number(m[1]);
+          remainingIds = remainingIds.filter((id) => id !== bad);
+          retries++;
+        } else throw err;
+      }
+    }
+    if (!attached || !remainingIds.length) {
+      console.error(`  Failed to attach any inbox (${retries} rejected) — aborting before lead upload`);
+      process.exit(1);
+    }
+    inboxes = inboxes.filter((i) => remainingIds.includes(i.id));
+    state.inboxes = inboxes;
+    markDone("inboxes");
+    console.error(`  Added ${remainingIds.length} inboxes (${retries} rejected)`);
+  }
+
+  // 4. Upload leads in batches of 100 (already-uploaded batches are skipped on resume)
+  const failedBatches: { batch: number; error: string }[] = [];
   for (let i = 0; i < leads.length; i += LEADS_BATCH) {
+    const batchIdx = Math.floor(i / LEADS_BATCH) + 1;
+    if (state.uploadedBatches.includes(batchIdx)) continue;
     const batch = leads.slice(i, i + LEADS_BATCH).map((l: any) => ({
       email: l.email,
       first_name: l.first_name || "",
@@ -208,33 +367,51 @@ async function main() {
     }));
     try {
       await slPost(`/campaigns/${campaignId}/leads`, { lead_list: batch });
-      uploaded += batch.length;
+      state.uploadedBatches.push(batchIdx);
+      state.uploadedLeads += batch.length;
+      saveState();
     } catch (err: any) {
-      console.error(`    batch ${Math.floor(i / LEADS_BATCH) + 1}: ${err.message.slice(0, 200)}`);
+      console.error(`    batch ${batchIdx}: ${err.message.slice(0, 200)}`);
+      failedBatches.push({ batch: batchIdx, error: err.message.slice(0, 200) });
     }
     await new Promise((r) => setTimeout(r, 300));
   }
-  console.error(`  Uploaded ${uploaded} leads`);
+  const uploaded = state.uploadedLeads;
+  console.error(`  Uploaded ${uploaded} leads (${failedBatches.length} failed batches)`);
+  if (uploaded === 0) {
+    console.error(`  No leads uploaded — skipping settings/activation. Failed batches:`);
+    for (const f of failedBatches) console.error(`    batch ${f.batch}: ${f.error}`);
+    process.exit(1);
+  }
 
   // 5. Settings + schedule
-  await slPost(`/campaigns/${campaignId}/settings`, {
-    track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
-    stop_lead_settings: "REPLY_TO_AN_EMAIL",
-    send_as_plain_text: false,
-    enable_ai_esp_matching: false,
-  });
-  await slPost(`/campaigns/${campaignId}/schedule`, {
-    timezone: "America/New_York",
-    days_of_the_week: [1, 2, 3, 4, 5],
-    start_hour: "08:00",
-    end_hour: "17:00",
-    min_time_btw_emails: 8,
-    max_new_leads_per_day: 1000,
-  });
+  if (!done("settings")) {
+    await slPost(`/campaigns/${campaignId}/settings`, {
+      track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
+      stop_lead_settings: "REPLY_TO_AN_EMAIL",
+      send_as_plain_text: false,
+      enable_ai_esp_matching: false,
+    });
+    markDone("settings");
+  }
+  if (!done("schedule")) {
+    await slPost(`/campaigns/${campaignId}/schedule`, {
+      timezone: "America/New_York",
+      days_of_the_week: [1, 2, 3, 4, 5],
+      start_hour: "08:00",
+      end_hour: "17:00",
+      min_time_btw_emails: 8,
+      max_new_leads_per_day: 1000,
+    });
+    markDone("schedule");
+  }
 
   // 6. Activate
   if (args.activate) {
-    await slPost(`/campaigns/${campaignId}/status`, { status: "START" });
+    if (!done("activated")) {
+      await slPost(`/campaigns/${campaignId}/status`, { status: "START" });
+      markDone("activated");
+    }
     console.error(`  Campaign #${campaignId} is LIVE`);
   } else {
     console.error(`  Campaign #${campaignId} created in DRAFT`);
@@ -249,6 +426,7 @@ async function main() {
     inboxes_assigned: inboxes,
     variants,
     lead_count_uploaded: uploaded,
+    failed_batches: failedBatches,
     launched_at: new Date().toISOString(),
     status: args.activate ? "launched" : "draft",
   };
@@ -258,7 +436,15 @@ async function main() {
     console.error(`  Wrote experiment log to ${args.experimentLog}`);
   }
 
-  console.log(JSON.stringify({ campaignId, inboxCount: inboxes.length, leadsUploaded: uploaded }));
+  console.log(
+    JSON.stringify({ campaignId, inboxCount: inboxes.length, leadsUploaded: uploaded, failedBatches })
+  );
+  if (failedBatches.length) {
+    // keep the state file so a rerun retries only the failed batches
+    console.error(`  Upload was partial (${failedBatches.length} failed batches) — exiting nonzero`);
+    process.exit(1);
+  }
+  rmSync(stateFile, { force: true });
 }
 
 main().catch((e) => {

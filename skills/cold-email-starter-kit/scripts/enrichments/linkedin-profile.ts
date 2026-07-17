@@ -2,8 +2,10 @@
 // Enrich leads with LinkedIn profile data via RapidAPI LinkedIn Bulk Scraper.
 // WARNING: LinkedIn ToS restricts scraping. Use at your own legal risk.
 // Run: npx tsx scripts/enrichments/linkedin-profile.ts --input leads.csv --output leads-li.csv
+// Resumable: rows that already have linkedin_headline are skipped, so re-running
+// with --input leads-li.csv resumes instead of re-billing every row.
 
-import { env, required, parseArgs, readCsv, writeCsv, createQueue, retry } from "../_lib.ts";
+import { required, parseArgs, readCsv, writeCsv, createQueue, fetchJson } from "../_lib.ts";
 
 async function main() {
   const { flags } = parseArgs();
@@ -19,11 +21,15 @@ async function main() {
   const queue = createQueue(5);
   const errors: any[] = [];
   let enriched = 0;
+  let skipped = 0;
 
   const enriched_rows = await Promise.all(leads.map(lead => queue.add(async () => {
     if (!lead.linkedin_url) return { ...lead };
+    // Resume: skip rows already enriched on a previous run.
+    if (lead.linkedin_headline) { skipped++; return { ...lead }; }
     try {
-      const res = await retry(() => fetch("https://linkedin-bulk-data-scraper.p.rapidapi.com/person", {
+      // fetchJson retries 429/5xx with backoff, fails fast on other 4xx (with body detail), and times out.
+      const j: any = await fetchJson("https://linkedin-bulk-data-scraper.p.rapidapi.com/person", {
         method: "POST",
         headers: {
           "X-RapidAPI-Key": key,
@@ -31,14 +37,10 @@ async function main() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ link: lead.linkedin_url }),
-      }));
-      if (!res.ok) {
-        errors.push({ email: lead.email, error: `HTTP ${res.status}` });
-        return { ...lead };
-      }
-      const j: any = await res.json();
+      });
       const p = j?.data || j;
-      if (p) {
+      // Only count/emit rows where the response actually contains profile data.
+      if (p && (p.headline || p.about || p.currentTenureYears)) {
         enriched++;
         return {
           ...lead,
@@ -57,8 +59,13 @@ async function main() {
   writeCsv(output, enriched_rows);
   if (errors.length > 0) writeCsv("linkedin-profile-errors.csv", errors);
 
+  if (skipped > 0) console.log(`Skipped ${skipped} rows already enriched (resume).`);
   console.log(`\n✅ Enriched ${enriched}/${leads.length} with LinkedIn data (${errors.length} errors)`);
   console.log(`Saved to ${output}`);
+  if (errors.length > 0) {
+    console.error(`${errors.length} rows failed — see linkedin-profile-errors.csv. Re-run with --input ${output} to retry only failed rows.`);
+    process.exit(1);
+  }
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

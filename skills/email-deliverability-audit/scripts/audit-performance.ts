@@ -10,6 +10,10 @@
  *   1. <out>-campaigns.csv — campaign-level aggregates (authoritative for 1% rule)
  *   2. <out>-inboxes.csv    — best-effort per-inbox stats from mailbox-statistics
  *
+ * Progress is checkpointed to <out>-campaigns.checkpoint.jsonl — rerunning after
+ * a crash resumes instead of re-pulling completed campaigns. The checkpoint is
+ * deleted after a fully successful run.
+ *
  * Usage:
  *   export SMARTLEAD_API_KEY=xxx
  *   npx tsx scripts/audit-performance.ts --out=/tmp/audit/performance
@@ -17,7 +21,14 @@
  *   npx tsx scripts/audit-performance.ts --campaign-ids=12345,67890 --out=/tmp/audit/perf
  */
 
-import { writeFileSync, mkdirSync } from "fs";
+import {
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readFileSync,
+  appendFileSync,
+  unlinkSync,
+} from "fs";
 import { dirname } from "path";
 
 const API_BASE = "https://server.smartlead.ai/api/v1";
@@ -38,28 +49,60 @@ function parseArgs() {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
     return arg ? arg.split("=").slice(1).join("=") : undefined;
   };
+  const idsRaw = get("--campaign-ids");
+  let campaignIds: number[] | undefined;
+  if (idsRaw) {
+    campaignIds = idsRaw.split(",").map((s) => {
+      const token = s.trim();
+      const n = Number(token);
+      if (!Number.isInteger(n) || token === "") {
+        console.error(`--campaign-ids contains a non-integer id: "${token}"`);
+        process.exit(1);
+      }
+      return n;
+    });
+  }
   return {
     clientId: get("--client-id"),
     out: get("--out") ?? "/tmp/audit/performance",
     maxCampaigns: get("--max-campaigns") ? Number(get("--max-campaigns")) : Infinity,
-    campaignIds: get("--campaign-ids")?.split(",").map((s) => Number(s.trim())),
+    campaignIds,
   };
 }
 
 async function fetchJson(url: string): Promise<any> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const resp = await fetch(url);
+  let lastErr = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    } catch (err) {
+      lastErr = `network error: ${String(err).slice(0, 150)}`;
+      console.error(`  [${lastErr}] retry ${attempt + 1}/5`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
     if (resp.status === 429 || resp.status >= 500) {
-      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      lastErr = `HTTP ${resp.status}`;
+      const wait = 1000 * 2 ** attempt;
+      console.error(`  [${resp.status}] retry ${attempt + 1}/5 in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
       continue;
     }
     if (!resp.ok) {
       const t = await resp.text().catch(() => "");
-      throw new Error(`${resp.status}: ${t.slice(0, 200)}`);
+      throw new Error(`HTTP ${resp.status}: ${t.slice(0, 200)}`);
     }
-    return resp.json();
+    try {
+      return await resp.json();
+    } catch (err) {
+      lastErr = `JSON parse error: ${String(err).slice(0, 150)}`;
+      console.error(`  [${lastErr}] retry ${attempt + 1}/5`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
   }
-  throw new Error("exhausted retries");
+  throw new Error(`Exhausted retries (last: ${lastErr})`);
 }
 
 async function listCampaigns(clientId?: string): Promise<any[]> {
@@ -114,6 +157,11 @@ interface InboxRow {
   campaigns: string;
 }
 
+interface CampaignFailure {
+  campaign_id: number;
+  error: string;
+}
+
 function toCsv<T>(rows: T[], headers: string[]): string {
   const lines = [headers.join(",")];
   for (const r of rows) {
@@ -143,11 +191,35 @@ async function main() {
     console.error(`${campaigns.length} active/paused/completed campaigns`);
   }
 
+  // Load checkpoint from a previous interrupted run (resume instead of restart)
+  mkdirSync(dirname(out), { recursive: true });
+  const checkpointPath = `${out}-campaigns.checkpoint.jsonl`;
+  const checkpointed = new Map<number, CampaignRow>();
+  if (existsSync(checkpointPath)) {
+    for (const line of readFileSync(checkpointPath, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line) as CampaignRow;
+        if (row && typeof row.campaign_id === "number") checkpointed.set(row.campaign_id, row);
+      } catch {
+        // skip corrupt checkpoint line
+      }
+    }
+    if (checkpointed.size)
+      console.error(`Resuming: ${checkpointed.size} campaigns already in checkpoint ${checkpointPath}`);
+  }
+
   // 2. Campaign-level aggregates (1% rule at campaign level)
   const campaignRows: CampaignRow[] = [];
+  const analyticsFailures: CampaignFailure[] = [];
   console.error("\n=== Campaign-level stats ===");
   for (let i = 0; i < campaigns.length; i++) {
     const c = campaigns[i];
+    const cached = checkpointed.get(c.id);
+    if (cached) {
+      campaignRows.push(cached);
+      continue;
+    }
     try {
       const a = await campaignAnalytics(c.id);
       const sent = Number(a.sent_count ?? 0);
@@ -155,7 +227,7 @@ async function main() {
       const bounces = Number(a.bounce_count ?? 0);
       const replyRate = sent ? (replies / sent) * 100 : 0;
       const bounceRate = sent ? (bounces / sent) * 100 : 0;
-      campaignRows.push({
+      const row: CampaignRow = {
         campaign_id: c.id,
         name: a.name || c.name || "",
         status: a.status || c.status || "",
@@ -166,14 +238,25 @@ async function main() {
         bounce_rate_pct: Number(bounceRate.toFixed(2)),
         flag_low_reply: sent >= LOW_REPLY_MIN_SENT && replyRate < LOW_REPLY_THRESHOLD,
         flag_high_bounce: sent >= HIGH_BOUNCE_MIN_SENT && bounceRate > HIGH_BOUNCE_THRESHOLD,
-      });
+      };
+      campaignRows.push(row);
+      appendFileSync(checkpointPath, JSON.stringify(row) + "\n");
       if ((i + 1) % 10 === 0)
         console.error(`  ${i + 1}/${campaigns.length} analytics pulled`);
     } catch (err) {
-      console.error(`  campaign ${c.id} analytics error: ${String(err).slice(0, 100)}`);
+      const msg = String(err).slice(0, 150);
+      analyticsFailures.push({ campaign_id: c.id, error: msg });
+      console.error(`  campaign ${c.id} analytics error: ${msg}`);
     }
   }
   campaignRows.sort((a, b) => b.sent - a.sent);
+
+  if (!campaignRows.length) {
+    console.error(
+      `\nNo campaign analytics succeeded (${analyticsFailures.length}/${campaigns.length} failed). No CSVs written — check API key / campaign ids.`
+    );
+    process.exit(1);
+  }
 
   // 3. Per-inbox aggregation (best-effort from mailbox-statistics + email-accounts)
   console.error("\n=== Per-inbox aggregation (best-effort) ===");
@@ -181,6 +264,7 @@ async function main() {
     number,
     { email: string; sent: number; replies: number; bounces: number; campaigns: Set<number> }
   >();
+  const inboxFailures: CampaignFailure[] = [];
   const sampledCampaigns = campaignRows.filter((c) => c.sent > 0).slice(0, 50);
   // mailbox-statistics only returns recent events (capped ~20 rows) — use for recent per-inbox hints
   // For proper per-inbox aggregates across the whole campaign, campaign-level flagging is more reliable
@@ -218,7 +302,9 @@ async function main() {
         agg.bounces += Number(s.bounce_count ?? 0);
       }
     } catch (err) {
-      console.error(`  campaign ${c.campaign_id} inbox aggregation error: ${String(err).slice(0, 100)}`);
+      const msg = String(err).slice(0, 150);
+      inboxFailures.push({ campaign_id: c.campaign_id, error: msg });
+      console.error(`  campaign ${c.campaign_id} inbox aggregation error: ${msg}`);
     }
   }
   const inboxRows: InboxRow[] = [];
@@ -242,7 +328,6 @@ async function main() {
   inboxRows.sort((a, b) => b.sent - a.sent);
 
   // 4. Write CSVs
-  mkdirSync(dirname(out), { recursive: true });
   const campaignHeaders = [
     "campaign_id",
     "name",
@@ -306,6 +391,22 @@ async function main() {
   console.log(`\nOutputs:`);
   console.log(`  ${out}-campaigns.csv  (authoritative — use this for 1% rule)`);
   console.log(`  ${out}-inboxes.csv    (best-effort per-inbox aggregation)`);
+
+  // 6. Failure report + exit code
+  console.log(
+    `\nFailures: ${analyticsFailures.length}/${campaigns.length} campaign analytics, ${inboxFailures.length}/${sampledCampaigns.length} inbox aggregations`
+  );
+  if (analyticsFailures.length || inboxFailures.length) {
+    for (const f of analyticsFailures)
+      console.error(`  analytics failed: campaign ${f.campaign_id}: ${f.error}`);
+    for (const f of inboxFailures)
+      console.error(`  inbox agg failed: campaign ${f.campaign_id}: ${f.error}`);
+    console.error(
+      `Checkpoint kept at ${checkpointPath} — rerun the same command to retry only the failed campaigns.`
+    );
+    process.exit(1);
+  }
+  if (existsSync(checkpointPath)) unlinkSync(checkpointPath);
 }
 
 main().catch((e) => {

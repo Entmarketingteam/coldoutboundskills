@@ -153,8 +153,11 @@ npx tsx scripts/phase-upload.ts \
   --domain=<target.com> \
   --inboxes-tag=active \
   --inbox-count=10 \
-  --activate
+  --activate \
+  --yes
 ```
+
+Campaign creation is a spend operation, so the script asks for confirmation. `--yes` skips that prompt and is REQUIRED when the script runs non-interactively (e.g. Claude Code's Bash tool — stdin is not a TTY, so without `--yes` the script exits 1 with "Refusing to create/modify a campaign without confirmation in non-interactive mode"). Omit `--yes` only when running by hand and you want to review before the campaign is created.
 
 This script:
 1. Creates a new Smartlead campaign named `[AUTO] <date> <target> Auto`
@@ -164,7 +167,7 @@ This script:
 5. Sets schedule (Mon-Fri 8am-5pm EST) and settings (tracking off, stop on reply)
 6. Activates the campaign
 
-Outputs: `{ campaignId, inboxCount, leadsUploaded }` to stdout.
+Outputs: `{ campaignId, inboxCount, leadsUploaded, failedBatches }` to stdout. If any lead batches failed to upload, `failedBatches` lists them and the script exits nonzero (the campaign still exists with the leads that did upload).
 
 ### Phase 8: Save experiment state (local JSON)
 
