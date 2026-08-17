@@ -2,13 +2,13 @@
 
 Open-source [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) for cold email infrastructure, lead sourcing, copywriting, and operations. Built by [GrowthEngineX](https://growthengine-x.com) from patterns across 1,000+ real B2B campaigns.
 
-28 skills that work together. Clone the repo, bring your API keys, point Claude Code at it, go from zero to a running campaign.
+30 skills that work together. Clone the repo, bring your API keys, point Claude Code at it, go from zero to a running campaign.
 
 **New here?** Invoke `/cold-email-kickoff` — it's the guided entry point that orchestrates ICP + lead magnet + strategy + plan in one flow.
 
 ## What's in here
 
-29 skills organized in 5 tracks.
+30 skills organized in 5 tracks.
 
 **New to cold email? Start with `/cold-email-kickoff`.** It orchestrates ICP → lead magnet → campaign strategy → plan in one guided flow.
 
@@ -26,6 +26,8 @@ Open-source [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/
 - **`deliverability-incident-response`** — triage playbook for spam, bounces, blacklists, warmup blocks
 
 ### Track 3 — List Building
+- **`list-builder`** — the meta skill for any list request: one-command lanes that sweep every source, AI-qualify every company, snowball until the market is dry, then pull uncapped contacts and find emails
+- **`list-expander`** — turn ~10 known-good seed companies into a full qualified TAM (fingerprint → lookalikes → mined filters → wide pull → AI qualification → live-site verify)
 - **`prospeo-full-export`** — title-first lead search (paginated, 25K+)
 - **`prospeo-search-api`** — Prospeo filter reference
 - **`blitz-list-builder`** — domain-first contact discovery
