@@ -56,6 +56,8 @@ assigns each company to one of N segments; use for industry sweeps that feed sev
 
 ## Requirements / env
 
+**Prerequisites:** Node ≥ 18 with `npx tsx` (`npm i -g tsx`); `python3` + `pip install gspread` only if you use the Google Sheet destination; `psql` on PATH only if you set `LIST_REGISTRY_DB_URL`. Copy the repo-root `.env.example` to `.env` and fill in the keys below — scripts walk up from `skills/list-builder/scripts/` to find it.
+
 Put these in a `.env` at the repo root (or `~/.env` — `loadEnv()` reads both) or export them.
 
 **REQUIRED**

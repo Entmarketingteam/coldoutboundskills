@@ -4,20 +4,20 @@ Usage: push-sheet.py <sheet_id> <tab_title> <lane-final.csv> [contact-count.json
 Replaces the tab's contents; updates a 'Summary' tab row if one exists with the tab title."""
 import csv, json, os, sys
 
-# Auth: a gspread client. Set GOOGLE_APPLICATION_CREDENTIALS (a service-account
-# JSON with the sheet shared to its email), or drop your own gs.py exposing
-# client() somewhere on GSHEETS_HELPER_DIR / PYTHONPATH.
-sys.path.insert(0, os.path.expanduser(os.environ.get("GSHEETS_HELPER_DIR", "~/bin/gsheets")))
+# Auth: gspread + a Google service-account JSON (pip install gspread). Create a service
+# account in Google Cloud, download its JSON key, share the target Sheet with the
+# service-account email, and set GOOGLE_APPLICATION_CREDENTIALS to the JSON path.
 try:
-    from gs import client
-except ImportError:
     import gspread
-    def client():
-        creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-        if not creds:
-            sys.exit("push-sheet: set GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON "
-                     "(or omit destination.sheet_id in lane.json for a CSV-only lane)")
-        return gspread.service_account(filename=os.path.expanduser(creds))
+except ImportError:
+    sys.exit("push-sheet: pip install gspread")
+
+def client():
+    creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not creds:
+        sys.exit("push-sheet: set GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON "
+                 "(or omit destination.sheet_id in lane.json for a CSV-only lane)")
+    return gspread.service_account(filename=os.path.expanduser(creds))
 
 sheet_id, tab, final_csv = sys.argv[1], sys.argv[2][:30], sys.argv[3]
 counts_path = sys.argv[4] if len(sys.argv) > 4 else None
