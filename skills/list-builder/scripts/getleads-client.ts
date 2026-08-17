@@ -152,7 +152,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const [cmd, jsonArgs] = process.argv.slice(2);
     const outArg = process.argv.find((a) => a.startsWith("--out="))?.slice("--out=".length);
     const args = jsonArgs ? JSON.parse(jsonArgs) : {};
-    if (!KEY) { console.error("No GetLeads key: set GETLEADS_API_KEY or add the getleads mcpServers entry to ~/.claude.json"); process.exit(1); }
+    if (!KEY) { console.error("No GetLeads key: set GETLEADS_API_KEY in .env (sign up at https://getleads.io)"); process.exit(1); }
     if (cmd === "count") {
       const n = await getleadsCount(args);
       console.log(n);
