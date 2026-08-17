@@ -9,11 +9,11 @@
  *   1. GetLeads export (free) — 500-domain batches, ALL seniorities/titles.
  *   2. Blitz find-contacts for domains GetLeads left at zero coverage.
  *   3. Prospeo /search-person LAST for still-zero domains (paid).
- *   4. contacts-merge → EVERY contact through the Clay email finder
- *      (emails-clay.ts) → leads-final.csv (Clay Final Email only).
+ *   4. contacts-merge → leads-final.csv (contacts with a provider email;
+ *      validate with MillionVerifier before sending — see SKILL.md "Emails").
  *
  * Stages (contacts-state.json, same artifact-based resume as run-lane):
- *   GETLEADS → COVERAGE → BLITZ → PROSPEO_PEOPLE → MERGE → CLAY → REPORT
+ *   GETLEADS → COVERAGE → BLITZ → PROSPEO_PEOPLE → MERGE → EMAILS → REPORT
  * Gate: refuses to run unless the lane's summary.md first line is READY
  * (override: --force after human review).
  */
@@ -30,8 +30,8 @@ process.on("unhandledRejection", (e) => console.error("unhandled:", String(e).sl
 const args = parseArgs();
 const LB = resolve(fileURLToPath(import.meta.url), "..");
 if (!args.config || !existsSync(String(args.config))) {
-  console.error("Usage: npx tsx contacts.ts --config=<lane.json> [--force] [--run-dir=<dir>] [--max-clay=N]\n" +
-    "  Runs Phase 4+5 for a READY lane: GetLeads -> Blitz -> Prospeo -> merge -> email finder.");
+  console.error("Usage: npx tsx contacts.ts --config=<lane.json> [--force] [--run-dir=<dir>]\n" +
+    "  Runs Phase 4+5 for a READY lane: GetLeads -> Blitz -> Prospeo -> merge -> leads-final.csv (validate with MillionVerifier).");
   process.exit(1);
 }
 const cfg = JSON.parse(readFileSync(String(args.config), "utf8"));
@@ -201,31 +201,28 @@ async function main() {
     mark("MERGE", `${readCsv(A.merged).length} unique contacts`);
   }
 
-  // 6. CLAY — every contact, no exceptions
-  // Requires your own Clay workspace + an email-finder function id
-  // (CLAY_EMAIL_FUNCTION_ID). Without it, use scripts/fast-lane-v2.ts on
-  // contacts-merged.csv instead — see SKILL.md "Emails without Clay".
-  if (!done("CLAY") && !process.env.CLAY_EMAIL_FUNCTION_ID) {
-    console.log(`\nSTOPPING BEFORE EMAILS: CLAY_EMAIL_FUNCTION_ID is not set.\n` +
-      `  ${readCsv(A.merged).length} merged contacts are ready at ${A.merged}\n` +
-      `  With Clay:    export CLAY_EMAIL_FUNCTION_ID=function:<your id>   then re-run this command\n` +
-      `  Without Clay: npx tsx ${join(LB, "fast-lane-v2.ts")} --run=${laneId} --csv=${A.merged} --validator=millionverifier`);
-    process.exit(0);
-  }
-  if (!done("CLAY")) {
-    const clayArgs = [`--run=__abs_contacts__${laneId}`, `--csv=${A.merged}`, "--batch=2000"];
-    if (args["max-clay"]) clayArgs.push(`--limit=${args["max-clay"]}`); // smoke tests / partial runs
-    const code = tsx(join(LB, "emails-clay.ts"), clayArgs);
-    if (code !== 0) throw new Error("emails-clay failed (resumable — re-run this same command)");
-    const clayOut = join(homedir(), "output", "list-builder", `__abs_contacts__${laneId}`, "leads-final.csv");
-    if (existsSync(clayOut)) writeFileSync(A.leadsFinal, readFileSync(clayOut));
-    mark("CLAY", `${existsSync(A.leadsFinal) ? readCsv(A.leadsFinal).length : 0} send-ready leads`);
+  // 6. EMAILS — keep every merged contact that has a provider email.
+  // GetLeads / Blitz / Prospeo all return an email + status per person. Rows whose
+  // provider says "verified"/"valid" are flagged email_status=verified; everything
+  // else is "unverified". Validate the whole file with MillionVerifier before you
+  // upload (see SKILL.md "Emails") — never send to unverified/catch-all addresses.
+  if (!done("EMAILS")) {
+    const rows = readCsv(A.merged);
+    const okStatus = /^(verified|valid|deliverable|ok|safe)$/i;
+    const leads = rows.filter((r) => (r.provider_email || "").includes("@")).map((r) => ({
+      ...r,
+      email: r.provider_email,
+      email_status: okStatus.test(r.provider_email_status || "") ? "verified" : "unverified",
+    }));
+    writeCsv(A.leadsFinal, leads);
+    const nv = leads.filter((l) => l.email_status === "verified").length;
+    mark("EMAILS", `${leads.length} contacts with an email (${nv} provider-verified) — validate with MillionVerifier before sending`);
   }
 
   // 7. REPORT
   saveMetrics(runDir, { contacts_stage: true });
   const leads = existsSync(A.leadsFinal) ? readCsv(A.leadsFinal).length : 0;
   const merged = existsSync(A.merged) ? readCsv(A.merged).length : 0;
-  console.log(`\n# CONTACTS DONE — ${laneId}\n- companies: ${domains.length}\n- unique contacts: ${merged}\n- send-ready leads (Clay Final Email): ${leads}\n- artifacts: ${A.leadsFinal}\nNext: upload to campaign platform per client instructions (leads-final.csv).`);
+  console.log(`\n# CONTACTS DONE — ${laneId}\n- companies: ${domains.length}\n- unique contacts: ${merged}\n- contacts with an email: ${leads} (see email_status column; run MillionVerifier before upload)\n- artifacts: ${A.leadsFinal}\nNext: upload to campaign platform per client instructions (leads-final.csv).`);
 }
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });

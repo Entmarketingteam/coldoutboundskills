@@ -8,8 +8,8 @@
  *     --csv=getleads-export.csv:getleads --csv=blitz-contacts.csv:blitz [--csv=prospeo.csv:prospeo]
  *
  * Each input keeps ALL original columns inside raw_json (max data retention).
- * Provider emails land in provider_email and are NEVER the send address —
- * every row goes through emails-clay.ts next, no exceptions.
+ * Provider emails land in provider_email (+ provider_email_status). contacts.ts
+ * turns these into leads-final.csv; validate with MillionVerifier before sending.
  * Dedup key: linkedin_url when present, else domain|first|last (lowercased).
  * Output: ~/output/list-builder/<run>/contacts-merged.csv
  */
@@ -98,5 +98,5 @@ const out = join(dir, "contacts-merged.csv");
 writeCsv(out, [...merged.values()]);
 const withLi = [...merged.values()].filter((r) => r.linkedin_url).length;
 console.log(`\n${merged.size} unique contacts from ${total} input rows → ${out}`);
-console.log(`${withLi} have LinkedIn URLs (required for Clay); ${merged.size - withLi} without (Clay can still try on name+domain, but expect lower hit rate)`);
-console.log("Next: emails-clay.ts — EVERY row goes through Clay; provider_email is never used as the send address.");
+console.log(`${withLi} have LinkedIn URLs; ${merged.size - withLi} without.`);
+console.log("Next: contacts.ts writes leads-final.csv from provider emails; validate with MillionVerifier before upload.");

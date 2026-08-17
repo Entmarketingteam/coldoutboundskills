@@ -1,6 +1,6 @@
 ---
 name: list-builder
-description: META skill — build the largest possible qualified lead list for any request, end to end. Orchestrates discovery (Prospeo + GetLeads + Blitz + Google Maps + lookalike snowball from /list-expander), AI qualification with live-website verify, uncapped contact pull (GetLeads → Blitz → Prospeo), and email finding (a Clay email-finder function when you have one, otherwise the built-in guess-and-validate lane). Use for any "build me a list", "get me leads for X", "find everyone who...", client list request, or campaign list build. Starts with a 7-line intake brief; outputs to Postgres, Google Sheet, and/or CSV (asks which).
+description: META skill — build the largest possible qualified lead list for any request, end to end. Orchestrates discovery (Prospeo + GetLeads + Blitz + Google Maps + lookalike snowball from /list-expander), AI qualification with live-website verify, uncapped contact pull (GetLeads → Blitz → Prospeo), and provider emails (GetLeads/Blitz/Prospeo) validated with MillionVerifier before sending. Use for any "build me a list", "get me leads for X", "find everyone who...", client list request, or campaign list build. Starts with a 7-line intake brief; outputs to Postgres, Google Sheet, and/or CSV (asks which).
 ---
 
 # List Builder — the meta list-building process
@@ -15,7 +15,7 @@ the decision table and failure playbook. In short:
 npx tsx scripts/make-judge.ts --spec=judge-spec.json --out=prompt.txt   # judge (mandatory blocks)
 npx tsx scripts/run-lane.ts  --config=lane.json                         # full lane, resumable
 npx tsx scripts/snowball.ts  --config=lane.json                         # sweep until dry
-npx tsx scripts/contacts.ts  --config=lane.json                         # contacts+Clay after approval
+npx tsx scripts/contacts.ts  --config=lane.json                         # contacts + emails after approval
 ```
 Re-running the same command resumes after ANY failure. `summary.md` line 1 = READY / NOT READY
 with the next command. Cross-run dedup via the OPTIONAL `list_builder_judged_domains`
@@ -34,14 +34,13 @@ its provider.
 | Prospeo filters/syntax | `/prospeo-search-api` |
 | Blitz domain→people | `/blitz-list-builder` (`scripts/find-contacts.ts`) |
 | GetLeads counts/exports | `scripts/getleads-client.ts` (counts are free) — optional, skipped without a key |
-| Email finding | `scripts/emails-clay.ts` (your own Clay function) OR `scripts/fast-lane-v2.ts` (no Clay) |
+| Email validation | provider emails from GetLeads/Blitz/Prospeo → `leads-final.csv`; validate with MillionVerifier (`/cold-email-starter-kit`) before upload |
 | Judge tuning | `/icp-prompt-builder` |
 | Local/SMB discovery | `/google-maps-list-builder` |
 | List QA before delivery | `/list-quality-scorecard` |
 
 Scripts in THIS skill's `scripts/`: `contacts-merge.ts` (normalize/dedup contact pulls, keeps
-every raw provider field), `emails-clay.ts` (Clay bulk runner + poller, resumable),
-`enrich-domains.ts` (batch Prospeo enrichment for any domain list — headcount/revenue/state/
+every raw provider field), `enrich-domains.ts` (batch Prospeo enrichment for any domain list — headcount/revenue/state/
 phone; strips subdomains), `classify-batch.ts` (multi-segment nano classifier — one pass
 assigns each company to one of N segments; use for industry sweeps that feed several lanes).
 
@@ -76,46 +75,25 @@ Put these in a `.env` at the repo root (or `~/.env` — `loadEnv()` reads both) 
 | `BLITZ_API_KEY` | domain→people fallback via `/blitz-list-builder` (see that skill for signup) | BLITZ stage skips, Prospeo covers those domains |
 | `EXA_API_KEY`, `PARALLEL_AI_API_KEY` | lookalike / entity discovery inside `/list-expander` Phase 2 (sign up at https://exa.ai, https://parallel.ai) | those sub-sources are skipped, seeds + filters still run |
 | `LIST_REGISTRY_DB_URL` | Postgres URL for cross-run dedup (DDL: `references/registry-schema.sql`) | WAL-only dedup: a run never re-judges itself, but earlier runs are not deduped |
-| `CLAY_EMAIL_FUNCTION_ID` | id of an email-finder function in YOUR Clay workspace (`emails-clay.ts`; sign up at https://clay.com) | contacts.ts stops after MERGE and prints the no-Clay command |
-| `CLAY_FASTLANE_ROUTINE_ID` | id of a Clay workflow running the guess ladder (`fast-lane-emails.ts`) | use `fast-lane-v2.ts`, which runs the same ladder with no Clay |
-| `LEADMAGIC_API_KEY` **or** `MILLIONVERIFIER_API_KEY` | the validator behind `fast-lane-v2.ts` — one per run, never mixed (https://leadmagic.io, https://millionverifier.com) | needed only if you run that script |
-| `EMAIL_CACHE_REST_URL`, `EMAIL_CACHE_SERVICE_KEY`, `EMAIL_CACHE_DB_URL` | your own "Email Database Cache" table for fast-lane write-back + the wrong-person corroboration check | fast-lane-v2 logs `[cache] … not set` and runs without caching |
+| `MILLIONVERIFIER_API_KEY` | validate `leads-final.csv` before upload (https://millionverifier.com) | OPTIONAL for the build; REQUIRED before you send |
 | `GOOGLE_APPLICATION_CREDENTIALS` | service-account JSON for the Google Sheet destination (`push-sheet.py`) | omit `destination.sheet_id` in lane.json for a CSV-only lane |
 
-`psql` must be on PATH for the registry and the email cache. Nothing else is required.
+`psql` must be on PATH for the optional registry. Nothing else is required.
 
-### Emails without Clay
+### Emails
 
-`emails-clay.ts` calls a function that lives in **your** Clay workspace — there is no
-shared one. Point `--function=function:<id>` at an email finder that takes
-`Linkedin Url / First Name / Last Name / Company Domain / Company Name` and returns
-`Final Email` + `Final Source`.
-
-With no Clay workspace, the supported alternative ships in this skill:
-
-```bash
-npx tsx scripts/fast-lane-v2.ts --run=<slug> --csv=contacts-merged.csv \
-    --validator=millionverifier      # or leadmagic
-```
-
-It guesses the common name patterns per domain and validates each candidate against
-MillionVerifier or LeadMagic (never both in one run), with a per-domain catch-all
-pre-flight, learned per-domain conventions, and a bare-first-name guard at large
-employers (headcount from Prospeo `/search-company`). Only `valid` verdicts are kept —
-never catch-all, never unknown. Caveat: guess-and-validate proves an address EXISTS, not
-that it belongs to your prospect (~17.5% of hits differed from the known-good address in
-benchmarking, concentrated at large employers).
+GetLeads, Blitz and Prospeo each return an email + verification status per person.
+`contacts.ts` writes every contact that has one to `leads-final.csv` with an
+`email_status` column (`verified` when the provider says so, else `unverified`). Before
+you upload, run the whole file through MillionVerifier (see `/cold-email-starter-kit`) and
+keep only `ok`/valid results — never catch-all, never unknown.
 
 ## Hard rules
 
 1. **ALL matching titles at ALL companies — never cap contacts per company.**
-2. **Emails: ALWAYS run every contact through the email finder — even when GetLeads/
-   Blitz/Prospeo returned an email.** Provider emails are stored as `provider_email`
-   (data retention) but NEVER used as the send address. `Final Email`/`Final Source`
-   from your Clay function (or the `valid` verdict from fast-lane-v2) is the sole
-   authority. GetLeads `email_status=VALID` is a hint, not send-ready.
-3. Keep only strict valid (`Final Email` non-empty, or the validator says `valid`).
-   Never catch-all/unknown.
+2. **Emails: validate every address before sending.** A provider status of
+   verified/VALID is a hint, not send-ready; MillionVerifier `ok` is the gate.
+3. Keep only strict valid results. Never catch-all/unknown.
 4. Save the MAXIMUM data providers return — every contact row carries `raw_json`;
    database destinations get a `raw_json JSONB` column.
 5. A live Google Sheet progress view is the default whenever you have sheet credentials
@@ -241,24 +219,15 @@ For every qualified company, pull ALL people matching target titles:
 Merge + dedup: `npx tsx scripts/contacts-merge.ts --run=<slug> --csv=<file>:<provider> ...`
 (dedupes by linkedin_url, else domain+first+last; keeps every original column in `raw_json`).
 
-## Phase 5 — Emails (every contact, always)
+## Phase 5 — Emails
 
-**With Clay** (your workspace, your function id):
-```bash
-npx tsx scripts/emails-clay.ts --run=<slug> --csv=<merged.csv> --function=function:<id> \
-    [--batch=2000] [--poll=30]
-```
-Builds JSONL `{id, inputs:{Linkedin Url, First Name, Company Domain, Company Name, Last Name}}`,
-runs `clay routines runs start <function> --bulk`, polls `runs get` until complete, joins
-`Final Email`/`Final Source` back. Output: `leads-final.csv` = rows with `Final Email` only;
-misses kept in `leads-no-email.csv` for retry.
+`contacts.ts` step 6 writes `leads-final.csv` (every merged contact with a provider email,
+`email_status` = verified|unverified). Then validate:
 
-**Without Clay** (nothing external required beyond a validator key):
 ```bash
-npx tsx scripts/fast-lane-v2.ts --run=<slug> --csv=<merged.csv> --validator=millionverifier
+# MillionVerifier bulk validation — see /cold-email-starter-kit for the script and key setup
+# keep result == "ok" only; drop catch_all / unknown / invalid
 ```
-Guess-and-validate ladder with catch-all pre-flight and per-domain learned conventions; keeps
-`valid` verdicts only. See "Emails without Clay" above for the accuracy caveat.
 
 ## Phase 6 — Deliver
 

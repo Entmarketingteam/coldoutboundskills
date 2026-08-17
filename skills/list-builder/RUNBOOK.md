@@ -50,8 +50,8 @@ npx tsx scripts/contacts.ts --config=<lane.json>
 ```
 GetLeads → Blitz → Prospeo (uncapped, all titles) → EVERY contact through the email
 finder (`leads-final.csv` = Final Email only; provider emails are never send-ready).
-Set `CLAY_EMAIL_FUNCTION_ID` to use your Clay function; without it contacts.ts stops
-after MERGE and prints the no-Clay command (`fast-lane-v2.ts`).
+contacts.ts ends by writing `leads-final.csv` from provider emails; validate it with
+MillionVerifier before uploading (see SKILL.md "Emails").
 
 ## Failure playbook
 
