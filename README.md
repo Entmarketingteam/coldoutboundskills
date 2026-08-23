@@ -41,6 +41,7 @@ Open-source [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/
 - **`smartlead-spintax`** — add spintax variations to emails
 - **`smartlead-api`** — Smartlead API reference
 - **`smartlead-campaign-upload-public`** — DRAFT-upload leads.csv + variants.yaml to Smartlead (always DRAFT, you hit Start manually)
+- **`smartlead-reply-agent-generator`** — generates Reply Agent config (goal/category/tone + guidance block) for a specific campaign; useful for UGC/creator seeding inboxes needing consistent voice + hard guardrails
 
 ### Track 5 — Iterate & Automate
 - **`positive-reply-scoring`** — the metric that matters (positive replies / total sent)
