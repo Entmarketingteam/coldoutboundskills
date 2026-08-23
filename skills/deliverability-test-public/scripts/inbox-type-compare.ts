@@ -5,7 +5,11 @@
  *
  * Usage:
  *   export SMARTLEAD_API_KEY=xxx
- *   npx tsx scripts/inbox-type-compare.ts [--client-id=5560] [--days=7]
+ *   npx tsx scripts/inbox-type-compare.ts [--client-id=5560] [--days=7] [--campaign-ids=1,2,3]
+ *
+ * Note: stats are pulled one campaign at a time; a crash mid-run restarts from
+ * zero. On large accounts, use --campaign-ids to scope (or retry) a subset —
+ * the failure report at the end prints the exact retry command.
  */
 
 const API_BASE = "https://server.smartlead.ai/api/v1";
@@ -21,9 +25,29 @@ function parseArgs() {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
     return arg ? arg.split("=").slice(1).join("=") : undefined;
   };
+  const daysRaw = get("--days");
+  const days = Number(daysRaw ?? 7);
+  if (!Number.isInteger(days) || days < 1) {
+    console.error(`--days must be a positive integer, got: ${daysRaw}`);
+    process.exit(1);
+  }
+  const idsRaw = get("--campaign-ids");
+  let campaignIds: number[] | undefined;
+  if (idsRaw) {
+    campaignIds = idsRaw.split(",").map((s) => {
+      const token = s.trim();
+      const n = Number(token);
+      if (!Number.isInteger(n) || token === "") {
+        console.error(`--campaign-ids contains a non-integer id: "${token}"`);
+        process.exit(1);
+      }
+      return n;
+    });
+  }
   return {
     clientId: get("--client-id"),
-    days: Number(get("--days") ?? 7),
+    days,
+    campaignIds,
   };
 }
 
@@ -34,19 +58,38 @@ function dateNDaysAgo(n: number): string {
 }
 
 async function fetchJson(url: string, init?: RequestInit): Promise<any> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const resp = await fetch(url, init);
+  let lastErr = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url, { ...init, signal: AbortSignal.timeout(30000) });
+    } catch (err) {
+      lastErr = `network error: ${String(err).slice(0, 150)}`;
+      console.error(`  [${lastErr}] retry ${attempt + 1}/5`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
     if (resp.status === 429 || resp.status >= 500) {
-      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      lastErr = `HTTP ${resp.status}`;
+      const wait = 1000 * 2 ** attempt;
+      console.error(`  [${resp.status}] retry ${attempt + 1}/5 in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
       continue;
     }
     if (!resp.ok) {
       const t = await resp.text().catch(() => "");
-      throw new Error(`${resp.status}: ${t.slice(0, 200)}`);
+      throw new Error(`HTTP ${resp.status}: ${t.slice(0, 200)}`);
     }
-    return resp.json();
+    try {
+      return await resp.json();
+    } catch (err) {
+      lastErr = `JSON parse error: ${String(err).slice(0, 150)}`;
+      console.error(`  [${lastErr}] retry ${attempt + 1}/5`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
   }
-  throw new Error("exhausted retries");
+  throw new Error(`Exhausted retries (last: ${lastErr})`);
 }
 
 async function listEmailAccounts(): Promise<any[]> {
@@ -77,12 +120,8 @@ async function campaignInboxStats(campaignId: number, startDate: string, endDate
   url.searchParams.set("api_key", API_KEY!);
   url.searchParams.set("start_date", startDate);
   url.searchParams.set("end_date", endDate);
-  try {
-    const data = await fetchJson(url.toString());
-    return Array.isArray(data) ? data : data.data ?? [];
-  } catch {
-    return [];
-  }
+  const data = await fetchJson(url.toString());
+  return Array.isArray(data) ? data : data.data ?? [];
 }
 
 function classifyType(raw: string | undefined, host: string | undefined): string {
@@ -95,7 +134,7 @@ function classifyType(raw: string | undefined, host: string | undefined): string
 }
 
 async function main() {
-  const { clientId, days } = parseArgs();
+  const { clientId, days, campaignIds } = parseArgs();
   const endDate = dateNDaysAgo(0);
   const startDate = dateNDaysAgo(days);
   console.error(`Pulling inbox inventory + campaign stats from ${startDate} to ${endDate}...`);
@@ -107,9 +146,15 @@ async function main() {
   }
   console.error(`  ${accounts.length} inbox accounts, ${new Set(accountTypeById.values()).size} types`);
 
-  const campaigns = await listCampaigns(clientId);
-  const active = campaigns.filter((c) => c.status === "ACTIVE" || c.status === "DRAFTED" || c.status === "PAUSED" || c.status === "COMPLETED");
-  console.error(`  ${active.length} campaigns`);
+  let active: any[];
+  if (campaignIds?.length) {
+    active = campaignIds.map((id) => ({ id }));
+    console.error(`  ${active.length} campaigns (from --campaign-ids)`);
+  } else {
+    const campaigns = await listCampaigns(clientId);
+    active = campaigns.filter((c) => c.status === "ACTIVE" || c.status === "DRAFTED" || c.status === "PAUSED" || c.status === "COMPLETED");
+    console.error(`  ${active.length} campaigns`);
+  }
 
   type Bucket = { inboxes: Set<number>; sent: number; replies: number; bounces: number };
   const buckets = new Map<string, Bucket>();
@@ -119,11 +164,19 @@ async function main() {
     return buckets.get(k)!;
   };
 
+  const failures: { campaign_id: number; error: string }[] = [];
   let processed = 0;
   for (const c of active) {
     processed++;
     if (processed % 20 === 0) console.error(`  ${processed}/${active.length} campaigns processed`);
-    const rows = await campaignInboxStats(c.id, startDate, endDate);
+    let rows: any[];
+    try {
+      rows = await campaignInboxStats(c.id, startDate, endDate);
+    } catch (err) {
+      failures.push({ campaign_id: c.id, error: String(err).slice(0, 150) });
+      console.error(`  campaign ${c.id} stats error: ${String(err).slice(0, 150)}`);
+      continue;
+    }
     for (const r of rows) {
       const id = r.email_account_id ?? r.id;
       const type = accountTypeById.get(id) ?? "unknown";
@@ -192,6 +245,16 @@ async function main() {
         `- ${type} has elevated bounce rate (${((b.bounces / b.sent) * 100).toFixed(2)}%) — run /email-deliverability-audit on these domains`
       );
     }
+  }
+
+  // Failure report + exit code
+  if (failures.length) {
+    console.error(`\nWARNING: stats failed for ${failures.length}/${active.length} campaigns — table above is incomplete:`);
+    for (const f of failures) console.error(`  campaign ${f.campaign_id}: ${f.error}`);
+    console.error(
+      `Retry just the failed campaigns with: --campaign-ids=${failures.map((f) => f.campaign_id).join(",")}`
+    );
+    process.exit(1);
   }
 }
 

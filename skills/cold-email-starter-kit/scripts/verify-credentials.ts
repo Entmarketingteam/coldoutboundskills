@@ -2,7 +2,9 @@
 // Pings every configured API. Prints ✅/⚠️/❌ status table.
 // Run: npx tsx scripts/verify-credentials.ts
 
-import { env, printTable } from "./_lib.ts";
+import { env, printTable, redactSecrets } from "./_lib.ts";
+
+const TIMEOUT_MS = 10000; // preflight should never hang
 
 interface Check {
   service: string;
@@ -13,15 +15,19 @@ interface Check {
 async function checkDynadot(): Promise<Check> {
   if (!env.DYNADOT_API_KEY) return { service: "Dynadot", status: "❌", notes: "DYNADOT_API_KEY not set" };
   try {
-    const r = await fetch(`https://api.dynadot.com/api3.json?key=${env.DYNADOT_API_KEY}&command=account_info`);
-    const j: any = await r.json();
+    const r = await fetch(`https://api.dynadot.com/api3.json?key=${env.DYNADOT_API_KEY}&command=account_info`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const text = await r.text();
+    let j: any;
+    try { j = JSON.parse(text); } catch {
+      return { service: "Dynadot", status: "❌", notes: `HTTP ${r.status}: non-JSON response (${redactSecrets(text.slice(0, 80))})` };
+    }
     if (j.Response?.ResponseCode === 0 || j.AccountInfoResponse) {
       const balance = j.AccountInfoResponse?.AccountInfo?.AccountBalance || "unknown";
       return { service: "Dynadot", status: "✅", notes: `Wallet: ${balance}` };
     }
-    return { service: "Dynadot", status: "❌", notes: `API error: ${j.Error || JSON.stringify(j).slice(0, 80)}` };
+    return { service: "Dynadot", status: "❌", notes: `API error: ${redactSecrets(j.Error || JSON.stringify(j).slice(0, 80))}` };
   } catch (e: any) {
-    return { service: "Dynadot", status: "❌", notes: `Network error: ${e.message}` };
+    return { service: "Dynadot", status: "❌", notes: `Network error: ${redactSecrets(String(e.message))}` };
   }
 }
 
@@ -30,15 +36,19 @@ async function checkZapmail(): Promise<Check> {
   try {
     const r = await fetch("https://api.zapmail.ai/api/v2/domains/assignable?limit=5&page=1", {
       headers: { "x-auth-zapmail": env.ZAPMAIL_API_KEY },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (r.status === 200) {
-      const j: any = await r.json();
+      let j: any;
+      try { j = await r.json(); } catch {
+        return { service: "Zapmail", status: "❌", notes: "HTTP 200 but invalid JSON response" };
+      }
       const count = j?.data?.length ?? 0;
       return { service: "Zapmail", status: "✅", notes: `${count} assignable domains visible` };
     }
     return { service: "Zapmail", status: "❌", notes: `HTTP ${r.status}` };
   } catch (e: any) {
-    return { service: "Zapmail", status: "❌", notes: `Network error: ${e.message}` };
+    return { service: "Zapmail", status: "❌", notes: `Network error: ${redactSecrets(String(e.message))}` };
   }
 }
 
@@ -50,6 +60,7 @@ async function checkProspeo(): Promise<Check> {
       method: "POST",
       headers: { "X-KEY": env.PROSPEO_API_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({ page: 1, filters: { person_location_search: { include: ["California, United States #US"] } } }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (r.status === 200) {
       return { service: "Prospeo", status: "✅", notes: "Auth OK" };
@@ -57,22 +68,25 @@ async function checkProspeo(): Promise<Check> {
     if (r.status === 401) return { service: "Prospeo", status: "❌", notes: "Invalid API key" };
     return { service: "Prospeo", status: "❌", notes: `HTTP ${r.status}` };
   } catch (e: any) {
-    return { service: "Prospeo", status: "❌", notes: `Network error: ${e.message}` };
+    return { service: "Prospeo", status: "❌", notes: `Network error: ${redactSecrets(String(e.message))}` };
   }
 }
 
 async function checkSmartlead(): Promise<Check> {
   if (!env.SMARTLEAD_API_KEY) return { service: "Smartlead", status: "⚠️", notes: "Not configured (optional if using Instantly)" };
   try {
-    const r = await fetch(`https://server.smartlead.ai/api/v1/campaigns?api_key=${env.SMARTLEAD_API_KEY}`);
+    const r = await fetch(`https://server.smartlead.ai/api/v1/campaigns?api_key=${env.SMARTLEAD_API_KEY}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (r.status === 200) {
-      const j: any = await r.json();
+      let j: any;
+      try { j = await r.json(); } catch {
+        return { service: "Smartlead", status: "❌", notes: "HTTP 200 but invalid JSON response" };
+      }
       const count = Array.isArray(j) ? j.length : 0;
       return { service: "Smartlead", status: "✅", notes: `${count} campaigns` };
     }
     return { service: "Smartlead", status: "❌", notes: `HTTP ${r.status}` };
   } catch (e: any) {
-    return { service: "Smartlead", status: "❌", notes: `Network error: ${e.message}` };
+    return { service: "Smartlead", status: "❌", notes: `Network error: ${redactSecrets(String(e.message))}` };
   }
 }
 
@@ -81,15 +95,19 @@ async function checkInstantly(): Promise<Check> {
   try {
     const r = await fetch("https://api.instantly.ai/api/v2/workspace", {
       headers: { "Authorization": `Bearer ${env.INSTANTLY_API_KEY}` },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (r.status === 200) {
-      const j: any = await r.json();
+      let j: any;
+      try { j = await r.json(); } catch {
+        return { service: "Instantly", status: "❌", notes: "HTTP 200 but invalid JSON response" };
+      }
       return { service: "Instantly", status: "✅", notes: `Workspace: ${j?.name || "OK"}` };
     }
     if (r.status === 401) return { service: "Instantly", status: "❌", notes: "Bearer token invalid" };
     return { service: "Instantly", status: "❌", notes: `HTTP ${r.status}` };
   } catch (e: any) {
-    return { service: "Instantly", status: "❌", notes: `Network error: ${e.message}` };
+    return { service: "Instantly", status: "❌", notes: `Network error: ${redactSecrets(String(e.message))}` };
   }
 }
 

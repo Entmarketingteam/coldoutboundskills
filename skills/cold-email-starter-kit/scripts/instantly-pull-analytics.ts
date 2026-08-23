@@ -2,33 +2,39 @@
 // Pull Instantly analytics to CSV.
 // Run: npx tsx scripts/instantly-pull-analytics.ts --campaign-id abc123
 
-import { env, required, parseArgs, writeCsv, retry } from "./_lib.ts";
+import { required, parseArgs, writeCsv, fetchJson } from "./_lib.ts";
 
 const API = "https://api.instantly.ai";
 
 async function main() {
   const { flags } = parseArgs();
-  const campaignId = flags["campaign-id"] as string;
+  const campaignId = flags["campaign-id"];
   const since = (flags.since as string) || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const until = (flags.until as string) || new Date().toISOString().slice(0, 10);
   const output = (flags.output as string) || "analytics.csv";
-  if (!campaignId) { console.error("Usage: --campaign-id <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD]"); process.exit(1); }
+  // A bare `--campaign-id` (no value) parses as boolean true — reject anything non-string.
+  if (typeof campaignId !== "string") { console.error("Usage: --campaign-id <id> [--since YYYY-MM-DD] [--until YYYY-MM-DD]"); process.exit(1); }
 
   const key = required("INSTANTLY_API_KEY");
 
   console.log(`Pulling Instantly analytics for ${campaignId}, ${since} → ${until}...`);
 
+  const headers = { "Authorization": `Bearer ${key}` };
+
+  // fetchJson retries 429/5xx with backoff, fails fast on other 4xx (with status + body detail),
+  // guards JSON parsing, and times out — no silent all-zero "success" on auth errors.
+
   // Overall stats
-  const overall: any = await retry(() => fetch(
+  const overall: any = await fetchJson(
     `${API}/api/v2/campaigns/analytics?campaign_id=${campaignId}&start_date=${since}&end_date=${until}`,
-    { headers: { "Authorization": `Bearer ${key}` } }
-  ).then(r => r.json() as Promise<any>));
+    { headers }
+  );
 
   // Daily breakdown
-  const daily: any = await retry(() => fetch(
+  const daily: any = await fetchJson(
     `${API}/api/v2/campaigns/analytics/daily?campaign_id=${campaignId}&start_date=${since}&end_date=${until}`,
-    { headers: { "Authorization": `Bearer ${key}` } }
-  ).then(r => r.json() as Promise<any>));
+    { headers }
+  );
 
   // Summary
   const o = Array.isArray(overall) ? overall[0] : (overall?.data || overall);

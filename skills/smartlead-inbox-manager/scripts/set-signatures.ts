@@ -41,7 +41,7 @@
  */
 
 import { readFileSync } from "fs";
-import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency } from "./_lib";
+import { API_BASE, API_KEY, parseFlag, selectInboxes, runWithConcurrency, fetchJson, confirmProceed } from "./_lib.js";
 
 const DEFAULT_TEMPLATE = "{from_name}\n{title}\n{company}\n{address}";
 
@@ -97,13 +97,25 @@ async function main() {
   console.error(`Matched ${inboxes.length} inboxes`);
   if (!inboxes.length) return;
 
+  // Guard against silently applying signatures with an empty name line.
+  if (usesFromName && !senderFullName) {
+    const missingName = inboxes.filter((i) => !(i.from_name && i.from_name.trim()));
+    if (missingName.length) {
+      console.error(
+        `${missingName.length} inboxes have no from_name and SENDER_FIRST_NAME/SENDER_LAST_NAME are unset — ` +
+          `set the env vars or fix from_name in Smartlead. Ids: ${missingName.map((i) => i.id).join(",")}`
+      );
+      process.exit(1);
+    }
+  }
+
   const sample = renderSignature(inboxes[0], template, senderFullName, title, company, address);
   console.error(`\nSample signature that will be applied to inbox ${inboxes[0].id} (${inboxes[0].from_email || inboxes[0].email}):\n---\n${sample}\n---`);
-  console.error(`\nApplying to ${inboxes.length} inboxes in 5s... (Ctrl+C to abort)`);
-  await new Promise((r) => setTimeout(r, 5000));
+  await confirmProceed(args, `Applying signatures to ${inboxes.length} inboxes`, 5);
 
   let ok = 0;
   let fail = 0;
+  const failedIds: number[] = [];
   await runWithConcurrency(inboxes, 5, async (inbox, i) => {
     const url = `${API_BASE}/email-accounts/save?api_key=${API_KEY}`;
     const body = {
@@ -111,24 +123,25 @@ async function main() {
       signature: renderSignature(inbox, template, senderFullName, title, company, address),
     };
     try {
-      const resp = await fetch(url, {
+      await fetchJson(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!resp.ok) {
-        const t = await resp.text().catch(() => "");
-        throw new Error(`${resp.status}: ${t.slice(0, 120)}`);
-      }
       ok++;
       if ((i + 1) % 20 === 0) console.error(`  ${i + 1}/${inboxes.length} processed`);
     } catch (err) {
       fail++;
+      failedIds.push(inbox.id);
       console.error(`  [${inbox.id}] ${inbox.from_email}: ${String(err).slice(0, 200)}`);
     }
   });
 
   console.error(`\nDone. ${ok} updated, ${fail} failed.`);
+  if (fail > 0) {
+    console.error(`Failed ids (retry with --ids=...): ${failedIds.join(",")}`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch((e) => {

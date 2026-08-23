@@ -2,6 +2,8 @@
  * Shared utilities for smartlead-inbox-manager scripts.
  */
 
+import { readFileSync, existsSync } from "fs";
+
 export const API_BASE = "https://server.smartlead.ai/api/v1";
 export const API_KEY = process.env.SMARTLEAD_API_KEY;
 
@@ -45,22 +47,51 @@ export interface InboxAccount {
   [key: string]: any;
 }
 
+/** Strip the API key from any string destined for logs/errors. */
+function redact(s: string): string {
+  return API_KEY ? s.split(API_KEY).join("***") : s;
+}
+
 export async function fetchJson(url: string, options?: RequestInit): Promise<any> {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const resp = await fetch(url, options);
+  const maxAttempts = 5;
+  let lastDetail = "";
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url, { ...options, signal: AbortSignal.timeout(30_000) });
+    } catch (err) {
+      // Network error / timeout — retry like a transient 5xx.
+      lastDetail = `network error: ${redact(String(err)).slice(0, 200)}`;
+      if (attempt < maxAttempts - 1) {
+        const wait = 1000 * 2 ** attempt;
+        console.error(`  [network] retry ${attempt + 1}/${maxAttempts} in ${wait}ms (${lastDetail})`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      break;
+    }
     if (resp.status === 429 || resp.status >= 500) {
+      const body = await resp.text().catch(() => "");
+      lastDetail = `HTTP ${resp.status}: ${redact(body).slice(0, 200)}`;
       const wait = 1000 * 2 ** attempt;
-      console.error(`  [${resp.status}] retry ${attempt + 1}/5 in ${wait}ms`);
+      console.error(`  [${resp.status}] retry ${attempt + 1}/${maxAttempts} in ${wait}ms`);
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
+    const text = await resp.text().catch(() => "");
     if (!resp.ok) {
-      const body = await resp.text().catch(() => "");
-      throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      throw new Error(`HTTP ${resp.status}: ${redact(text).slice(0, 200)}`);
     }
-    return resp.json();
+    if (!text.trim()) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Invalid JSON from Smartlead (HTTP ${resp.status}): ${redact(text).slice(0, 200)}`
+      );
+    }
   }
-  throw new Error("Exhausted retries");
+  throw new Error(`Exhausted retries (last: ${lastDetail || "no response detail"})`);
 }
 
 export async function listAllInboxes(): Promise<InboxAccount[]> {
@@ -76,6 +107,36 @@ export async function listAllInboxes(): Promise<InboxAccount[]> {
     offset += limit;
   }
   return all;
+}
+
+/** Parse id tokens; exit 1 listing any non-numeric values instead of silently matching nothing. */
+function parseIds(tokens: string[], source: string): Set<number> {
+  const ids = new Set<number>();
+  const bad: string[] = [];
+  for (const raw of tokens) {
+    const t = raw.trim();
+    const n = Number(t);
+    if (!t || !Number.isFinite(n)) bad.push(raw);
+    else ids.add(n);
+  }
+  if (bad.length) {
+    console.error(`Non-numeric id value(s) in ${source}: ${bad.join(", ")}`);
+    process.exit(1);
+  }
+  return ids;
+}
+
+/**
+ * Confirmation gate for idempotent bulk config mutations (warmup/signatures/tags).
+ * --yes skips the delay entirely; otherwise a short countdown runs and then the
+ * script proceeds — in both TTY and non-TTY mode — so documented commands stay
+ * runnable unattended. Truly destructive/spend operations should hard-require
+ * --yes instead of using this helper.
+ */
+export async function confirmProceed(args: string[], summary: string, seconds = 3): Promise<void> {
+  if (hasFlag(args, "--yes")) return;
+  console.error(`${summary} — proceeding in ${seconds}s... (Ctrl+C to abort, or pass --yes to skip)`);
+  await new Promise((r) => setTimeout(r, seconds * 1000));
 }
 
 /**
@@ -95,7 +156,7 @@ export async function selectInboxes(args: string[]): Promise<InboxAccount[]> {
 
   const ids = parseFlag(args, "--ids");
   if (ids) {
-    const idSet = new Set(ids.split(",").map((x) => Number(x.trim())));
+    const idSet = parseIds(ids.split(","), "--ids");
     return all.filter((a) => idSet.has(a.id));
   }
 
@@ -111,14 +172,25 @@ export async function selectInboxes(args: string[]): Promise<InboxAccount[]> {
 
   const csv = parseFlag(args, "--ids-from-csv");
   if (csv) {
-    const { readFileSync } = require("fs");
+    if (!existsSync(csv)) {
+      console.error(`CSV not found: ${csv}`);
+      process.exit(1);
+    }
+    // Strip surrounding double quotes so CSVs written by list-health --out round-trip.
+    const unq = (s: string) => s.trim().replace(/^"|"$/g, "");
     const text = readFileSync(csv, "utf8");
-    const lines = text.trim().split("\n");
-    const header = lines[0].split(",");
+    const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
+    const header = lines[0].split(",").map(unq);
     const idCol = header.indexOf("id");
-    if (idCol < 0) throw new Error(`CSV ${csv} missing 'id' column`);
-    const ids = new Set(lines.slice(1).map((l) => Number(l.split(",")[idCol].trim())));
-    return all.filter((a) => ids.has(a.id));
+    if (idCol < 0) {
+      console.error(`CSV ${csv} missing 'id' column`);
+      process.exit(1);
+    }
+    const csvIds = parseIds(
+      lines.slice(1).map((l) => unq(l.split(",")[idCol] ?? "")),
+      `CSV ${csv}`
+    );
+    return all.filter((a) => csvIds.has(a.id));
   }
 
   console.error(

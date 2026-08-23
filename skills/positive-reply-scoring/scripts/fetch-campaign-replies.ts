@@ -14,7 +14,8 @@
  *   --since=YYYY-MM-DD    Only replies after this date
  */
 
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync } from "fs";
+import { dirname } from "path";
 
 const API_BASE = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
@@ -22,6 +23,11 @@ const API_KEY = process.env.SMARTLEAD_API_KEY;
 if (!API_KEY) {
   console.error("Missing env var: SMARTLEAD_API_KEY");
   process.exit(1);
+}
+
+// Never let the API key (passed as a query param) leak into logs/errors.
+function sanitize(s: string): string {
+  return API_KEY ? s.split(API_KEY).join("***") : s;
 }
 
 function parseArgs() {
@@ -38,6 +44,12 @@ function parseArgs() {
     console.error("Usage: --campaign-id=12345 [--out=path] [--client-id=X] [--since=YYYY-MM-DD]");
     process.exit(1);
   }
+  if (since && Number.isNaN(new Date(since).getTime())) {
+    console.error(`--since must be YYYY-MM-DD, got: ${since}`);
+    process.exit(1);
+  }
+  // Fail fast if the output directory doesn't exist — before any API work.
+  mkdirSync(dirname(out), { recursive: true });
   return { campaignId, out, clientId, since };
 }
 
@@ -64,8 +76,20 @@ interface Reply {
 }
 
 async function fetchJson(url: string): Promise<any> {
+  // Use the pathname in messages — the full URL carries api_key as a query param.
+  const pathname = new URL(url).pathname;
+  let lastErr = "";
   for (let attempt = 0; attempt < 5; attempt++) {
-    const resp = await fetch(url);
+    let resp: Response;
+    try {
+      resp = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    } catch (err) {
+      lastErr = sanitize(String(err)).slice(0, 200);
+      const wait = 1000 * 2 ** attempt;
+      console.error(`  [network error: ${lastErr}] ${pathname} retry in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
     if (resp.status === 429 || resp.status >= 500) {
       const wait = 1000 * 2 ** attempt;
       console.error(`  [${resp.status}] retry in ${wait}ms`);
@@ -74,11 +98,16 @@ async function fetchJson(url: string): Promise<any> {
     }
     if (!resp.ok) {
       const body = await resp.text().catch(() => "");
-      throw new Error(`HTTP ${resp.status}: ${body.slice(0, 200)}`);
+      throw new Error(`HTTP ${resp.status} from ${pathname}: ${body.slice(0, 200)}`);
     }
-    return resp.json();
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Invalid JSON from ${pathname}: ${text.slice(0, 200)}`);
+    }
   }
-  throw new Error("Exhausted retries");
+  throw new Error(`Exhausted retries for ${pathname}${lastErr ? ` (last error: ${lastErr})` : ""}`);
 }
 
 async function listLeadsWithReplies(
@@ -139,45 +168,80 @@ async function main() {
   const replies: Reply[] = [];
   const sinceDate = since ? new Date(since) : null;
 
+  // Resume from checkpoint if a previous run was interrupted.
+  const partialPath = `${out}.partial`;
+  const processed = new Set<string>();
+  if (existsSync(partialPath)) {
+    try {
+      const saved = JSON.parse(readFileSync(partialPath, "utf8"));
+      if (saved && Array.isArray(saved.replies) && Array.isArray(saved.processed)) {
+        replies.push(...saved.replies);
+        for (const id of saved.processed) processed.add(String(id));
+        console.error(`Resuming from ${partialPath}: ${processed.size} leads already processed (${replies.length} replies)`);
+      }
+    } catch {
+      console.error(`  ⚠ Could not parse ${partialPath}; starting from scratch`);
+    }
+  }
+  const checkpoint = () =>
+    writeFileSync(partialPath, JSON.stringify({ processed: [...processed], replies }));
+
+  const failed: (string | number)[] = [];
   for (let i = 0; i < leads.length; i++) {
     const lead = leads[i];
-    try {
-      const history = await fetchMessageHistory(campaignId, lead.id);
-      // Find first inbound reply (type === 'REPLY' or message_type === 'inbound')
-      const firstReply = history.find(
-        (m: any) =>
-          m.type === "REPLY" ||
-          m.message_type === "REPLY" ||
-          m.message_type === "inbound" ||
-          m.direction === "inbound"
-      );
-      if (!firstReply) {
-        console.error(`  lead ${lead.id} had reply flag but no reply in history`);
-        continue;
+    if (!processed.has(String(lead.id))) {
+      try {
+        const history = await fetchMessageHistory(campaignId, lead.id);
+        // Find first inbound reply (type === 'REPLY' or message_type === 'inbound')
+        const firstReply = history.find(
+          (m: any) =>
+            m.type === "REPLY" ||
+            m.message_type === "REPLY" ||
+            m.message_type === "inbound" ||
+            m.direction === "inbound"
+        );
+        if (!firstReply) {
+          console.error(`  lead ${lead.id} had reply flag but no reply in history`);
+        } else {
+          const replyTime = firstReply.time || firstReply.sent_time || firstReply.received_time;
+          if (!(sinceDate && replyTime && new Date(replyTime) < sinceDate)) {
+            const rawBody = firstReply.email_body || firstReply.body || firstReply.body_text || "";
+            replies.push({
+              lead_id: lead.id,
+              email: lead.email,
+              lead_first_name: lead.first_name || "",
+              company: lead.company_name || "",
+              reply_time: replyTime || "",
+              reply_subject: firstReply.subject || "",
+              reply_body: stripHtml(rawBody).slice(0, 5000),
+              sequence_step: firstReply.stats_id || firstReply.seq_number || 0,
+            });
+          }
+        }
+        processed.add(String(lead.id));
+      } catch (err) {
+        failed.push(lead.id);
+        console.error(`  lead ${lead.id} failed: ${sanitize(String(err)).slice(0, 200)}`);
       }
-      const replyTime = firstReply.time || firstReply.sent_time || firstReply.received_time;
-      if (sinceDate && replyTime && new Date(replyTime) < sinceDate) continue;
-      const rawBody = firstReply.email_body || firstReply.body || firstReply.body_text || "";
-      replies.push({
-        lead_id: lead.id,
-        email: lead.email,
-        lead_first_name: lead.first_name || "",
-        company: lead.company_name || "",
-        reply_time: replyTime || "",
-        reply_subject: firstReply.subject || "",
-        reply_body: stripHtml(rawBody).slice(0, 5000),
-        sequence_step: firstReply.stats_id || firstReply.seq_number || 0,
-      });
-      if ((i + 1) % 20 === 0) {
-        console.error(`  ${i + 1}/${leads.length} fetched`);
-      }
-    } catch (err) {
-      console.error(`  lead ${lead.id} failed: ${String(err).slice(0, 100)}`);
+    }
+    if ((i + 1) % 20 === 0) {
+      console.error(`  ${i + 1}/${leads.length} fetched`);
+      checkpoint();
     }
   }
 
   writeFileSync(out, JSON.stringify(replies, null, 2));
   console.error(`\nWrote ${out} — ${replies.length} replies`);
+
+  if (failed.length) {
+    // Keep the checkpoint so a rerun retries only the failed leads.
+    checkpoint();
+    console.error(`⚠ ${failed.length} leads failed message-history fetch: ${failed.join(", ")}`);
+    console.error(`  Re-run the same command to retry them (checkpoint kept at ${partialPath}).`);
+    process.exitCode = 1;
+  } else if (existsSync(partialPath)) {
+    unlinkSync(partialPath);
+  }
 }
 
 main().catch((e) => {

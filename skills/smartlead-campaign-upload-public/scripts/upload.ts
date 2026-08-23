@@ -12,9 +12,11 @@
  *
  * Optional:
  *   --client-id=X    Smartlead sub-client ID (if your account uses sub-clients)
+ *   --yes            Skip the interactive confirmation before creating the campaign
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from "fs";
+import { createInterface } from "readline/promises";
 
 const API = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
@@ -49,6 +51,7 @@ function parseArgs() {
     leads: get("--leads"),
     variants: get("--variants"),
     clientId: get("--client-id"),
+    yes: args.includes("--yes"),
   };
 }
 
@@ -240,13 +243,26 @@ function parseScalar(s: string): YamlValue {
 
 // ---------- Smartlead API helpers ----------
 
+// Never let the API key (passed as a query param) leak into logs/errors.
+function sanitize(s: string): string {
+  return API_KEY ? s.split(API_KEY).join("***") : s;
+}
+
 async function slPost(path: string, body: any): Promise<any> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const resp = await fetch(`${API}${path}?api_key=${API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    let resp: Response;
+    try {
+      resp = await fetch(`${API}${path}?api_key=${API_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      console.error(`  [network error on POST ${path}: ${sanitize(String(err)).slice(0, 150)}] retrying...`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
     if (resp.status === 429 || resp.status >= 500) {
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       continue;
@@ -255,18 +271,44 @@ async function slPost(path: string, body: any): Promise<any> {
       const t = await resp.text().catch(() => "");
       throw new Error(`POST ${path} → ${resp.status}: ${t.slice(0, 300)}`);
     }
-    return resp.json();
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`POST ${path} → invalid JSON: ${text.slice(0, 200)}`);
+    }
   }
   throw new Error(`Exhausted retries for POST ${path}`);
 }
 
 async function slGet(path: string): Promise<any> {
-  const resp = await fetch(`${API}${path}${path.includes("?") ? "&" : "?"}api_key=${API_KEY}`);
-  if (!resp.ok) {
-    const t = await resp.text().catch(() => "");
-    throw new Error(`GET ${path} → ${resp.status}: ${t.slice(0, 200)}`);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(`${API}${path}${path.includes("?") ? "&" : "?"}api_key=${API_KEY}`, {
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      console.error(`  [network error on GET ${path}: ${sanitize(String(err)).slice(0, 150)}] retrying...`);
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
+    if (resp.status === 429 || resp.status >= 500) {
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => "");
+      throw new Error(`GET ${path} → ${resp.status}: ${t.slice(0, 200)}`);
+    }
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`GET ${path} → invalid JSON: ${text.slice(0, 200)}`);
+    }
   }
-  return resp.json();
+  throw new Error(`Exhausted retries for GET ${path}`);
 }
 
 async function listInboxes(): Promise<any[]> {
@@ -287,7 +329,21 @@ async function listInboxes(): Promise<any[]> {
 function validateVariants(v: any): void {
   if (!v || typeof v !== "object") throw new Error("variants.yaml must be a map at the top level");
   if (!v.name) throw new Error("variants.yaml: `name` is required");
-  if (!v.schedule) throw new Error("variants.yaml: `schedule` is required");
+  if (!v.schedule || typeof v.schedule !== "object") throw new Error("variants.yaml: `schedule` is required");
+  // Validate every schedule field consumed in main() up front — a bad schedule
+  // otherwise only fails at step 8, after the campaign + leads already exist.
+  if (typeof v.schedule.timezone !== "string" || !v.schedule.timezone)
+    throw new Error("variants.yaml: `schedule.timezone` must be a string (e.g. \"America/New_York\")");
+  if (!Array.isArray(v.schedule.days) || !v.schedule.days.length)
+    throw new Error("variants.yaml: `schedule.days` must be a non-empty array (e.g. [1,2,3,4,5])");
+  for (const key of ["start_hour", "end_hour"]) {
+    if (typeof v.schedule[key] !== "string" || !v.schedule[key])
+      throw new Error(`variants.yaml: \`schedule.${key}\` must be a string like "09:00"`);
+  }
+  for (const key of ["min_time_btw_emails", "max_leads_per_day"]) {
+    if (!Number.isFinite(v.schedule[key]))
+      throw new Error(`variants.yaml: \`schedule.${key}\` must be a number`);
+  }
   if (!v.inbox_selection?.tag) throw new Error("variants.yaml: `inbox_selection.tag` is required");
   if (!Number.isFinite(v.inbox_selection?.count)) throw new Error("variants.yaml: `inbox_selection.count` must be a number");
   if (!Array.isArray(v.sequences) || !v.sequences.length) throw new Error("variants.yaml: `sequences` must be a non-empty array");
@@ -317,10 +373,26 @@ function validateCsvSchema(headers: string[]): void {
 
 // ---------- main ----------
 
+// Checkpoint written next to the variants file so a failed run resumes instead
+// of creating a duplicate draft campaign and re-uploading leads from batch 0.
+interface UploadState {
+  name: string;
+  campaignId: number | string;
+  sequencesDone: boolean;
+  inboxesDone: boolean;
+  leadsUploaded: number; // offset of next lead batch to attempt
+  settingsDone: boolean;
+  scheduleDone: boolean;
+}
+
 async function main() {
   const args = parseArgs();
   if (!args.leads || !args.variants) {
-    console.error("Usage: --leads=<path> --variants=<path> [--client-id=X]");
+    console.error("Usage: --leads=<path> --variants=<path> [--client-id=X] [--yes]");
+    process.exit(1);
+  }
+  if (args.clientId && !/^\d+$/.test(args.clientId)) {
+    console.error(`--client-id must be numeric, got: ${args.clientId}`);
     process.exit(1);
   }
 
@@ -339,63 +411,131 @@ async function main() {
   const variantCount = v.sequences.reduce((s: number, seq: any) => s + seq.variants.length, 0);
   console.error(`  ${v.sequences.length} sequences, ${variantCount} total variants`);
 
-  // 3. Create campaign
-  console.error(`Creating Smartlead campaign "${v.name}"...`);
-  const createBody: any = { name: v.name };
-  if (args.clientId) createBody.client_id = Number(args.clientId);
-  const created = await slPost("/campaigns/create", createBody);
-  const campaignId = created.id ?? created.campaign_id;
-  if (!campaignId) throw new Error(`Campaign create failed: ${JSON.stringify(created)}`);
-  console.error(`  ✓ Campaign #${campaignId}`);
-
-  // 4. Save sequences
-  const slSequences = v.sequences.map((seq: any) => ({
-    seq_number: seq.step,
-    seq_delay_details: { delay_in_days: seq.delay_days },
-    seq_variants: seq.variants.map((va: any) => ({
-      variant_label: va.label,
-      subject: (va.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
-      email_body: va.body,
-    })),
-  }));
-  await slPost(`/campaigns/${campaignId}/sequences`, { sequences: slSequences });
-  console.error(`  ✓ Sequence saved (${v.sequences.length} steps)`);
-
-  // 5. Select inboxes by tag, LRU by daily_sent_count
-  const allInboxes = await listInboxes();
-  const tagged = allInboxes.filter((inb: any) =>
-    (inb.tags ?? []).some((t: any) => t.name === v.inbox_selection.tag) &&
-    inb.is_smtp_success &&
-    !inb.warmup_details?.is_warmup_blocked
-  );
-  tagged.sort((a: any, b: any) => (a.daily_sent_count ?? 0) - (b.daily_sent_count ?? 0));
-  const selected = tagged.slice(0, v.inbox_selection.count);
-  if (!selected.length) {
-    throw new Error(`No healthy inboxes found with tag=${v.inbox_selection.tag}. Run /smartlead-inbox-manager to tag inboxes first.`);
-  }
-  if (selected.length < v.inbox_selection.count) {
-    console.error(`  ⚠ Only ${selected.length} inboxes matched (requested ${v.inbox_selection.count}). Proceeding with what's available.`);
-  }
-  let attachIds = selected.map((i: any) => i.id);
-  let retries = 0;
-  while (attachIds.length && retries < 10) {
+  // Resume state from a previous interrupted run of the same campaign
+  const statePath = `${args.variants}.upload-state.json`;
+  let state: UploadState | null = null;
+  if (existsSync(statePath)) {
     try {
-      await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: attachIds });
-      break;
-    } catch (err: any) {
-      const m = err.message?.match(/Email account id - (\d+) not allowed/);
-      if (m) {
-        const bad = Number(m[1]);
-        attachIds = attachIds.filter((id: number) => id !== bad);
-        retries++;
-      } else throw err;
+      const saved = JSON.parse(readFileSync(statePath, "utf8"));
+      if (saved && saved.name === v.name && saved.campaignId) state = saved;
+      else console.error(`  ⚠ Ignoring ${statePath} (belongs to a different campaign name)`);
+    } catch {
+      console.error(`  ⚠ Could not parse ${statePath}; starting fresh`);
     }
   }
-  console.error(`  ✓ ${attachIds.length} inboxes attached (tag=${v.inbox_selection.tag}, LRU)`);
+  const saveState = () => writeFileSync(statePath, JSON.stringify(state, null, 2));
 
-  // 6. Upload leads in batches
-  let uploaded = 0;
-  for (let i = 0; i < leads.length; i += LEADS_BATCH) {
+  // 3. Create campaign (spend-class operation — gated unless --yes or non-TTY)
+  let campaignId: number | string;
+  if (state) {
+    campaignId = state.campaignId;
+    console.error(`Resuming previous upload from ${statePath}`);
+    console.error(`  ✓ Reusing campaign #${campaignId}`);
+  } else {
+    console.error(`\nAbout to create Smartlead campaign:`);
+    console.error(`  name:      ${v.name}`);
+    console.error(`  leads:     ${leads.length}`);
+    console.error(`  variants:  ${variantCount} across ${v.sequences.length} steps`);
+    console.error(`  inboxes:   ${v.inbox_selection.count} (tag=${v.inbox_selection.tag})`);
+    console.error(`  schedule:  ${v.schedule.timezone} ${v.schedule.start_hour}-${v.schedule.end_hour}, days=${JSON.stringify(v.schedule.days)}`);
+    if (args.yes || !process.stdin.isTTY) {
+      console.error(`  (confirmation skipped: ${args.yes ? "--yes passed" : "non-interactive stdin"})`);
+    } else {
+      const rl = createInterface({ input: process.stdin, output: process.stderr });
+      const answer = (await rl.question("Proceed? [y/N] ")).trim().toLowerCase();
+      rl.close();
+      if (answer !== "y" && answer !== "yes") {
+        console.error("Aborted.");
+        process.exit(1);
+      }
+    }
+    console.error(`Creating Smartlead campaign "${v.name}"...`);
+    const createBody: any = { name: v.name };
+    if (args.clientId) createBody.client_id = Number(args.clientId);
+    const created = await slPost("/campaigns/create", createBody);
+    campaignId = created.id ?? created.campaign_id;
+    if (!campaignId) throw new Error(`Campaign create failed: ${JSON.stringify(created)}`);
+    console.error(`  ✓ Campaign #${campaignId}`);
+    state = {
+      name: v.name,
+      campaignId,
+      sequencesDone: false,
+      inboxesDone: false,
+      leadsUploaded: 0,
+      settingsDone: false,
+      scheduleDone: false,
+    };
+    saveState();
+  }
+
+  // 4. Save sequences
+  if (state.sequencesDone) {
+    console.error(`  ✓ Sequences already saved (resumed)`);
+  } else {
+    const slSequences = v.sequences.map((seq: any) => ({
+      seq_number: seq.step,
+      seq_delay_details: { delay_in_days: seq.delay_days },
+      seq_variants: seq.variants.map((va: any) => ({
+        variant_label: va.label,
+        subject: (va.subject || "").replace(/—/g, " - ").replace(/–/g, " - "),
+        email_body: va.body,
+      })),
+    }));
+    await slPost(`/campaigns/${campaignId}/sequences`, { sequences: slSequences });
+    console.error(`  ✓ Sequence saved (${v.sequences.length} steps)`);
+    state.sequencesDone = true;
+    saveState();
+  }
+
+  // 5. Select inboxes by tag, LRU by daily_sent_count
+  if (state.inboxesDone) {
+    console.error(`  ✓ Inboxes already attached (resumed)`);
+  } else {
+    const allInboxes = await listInboxes();
+    const tagged = allInboxes.filter((inb: any) =>
+      (inb.tags ?? []).some((t: any) => t.name === v.inbox_selection.tag) &&
+      inb.is_smtp_success &&
+      !inb.warmup_details?.is_warmup_blocked
+    );
+    tagged.sort((a: any, b: any) => (a.daily_sent_count ?? 0) - (b.daily_sent_count ?? 0));
+    const selected = tagged.slice(0, v.inbox_selection.count);
+    if (!selected.length) {
+      throw new Error(`No healthy inboxes found with tag=${v.inbox_selection.tag}. Run /smartlead-inbox-manager to tag inboxes first.`);
+    }
+    if (selected.length < v.inbox_selection.count) {
+      console.error(`  ⚠ Only ${selected.length} inboxes matched (requested ${v.inbox_selection.count}). Proceeding with what's available.`);
+    }
+    let attachIds = selected.map((i: any) => i.id);
+    let retries = 0;
+    let attached = false;
+    while (attachIds.length && retries < 10) {
+      try {
+        await slPost(`/campaigns/${campaignId}/email-accounts`, { email_account_ids: attachIds });
+        attached = true;
+        break;
+      } catch (err: any) {
+        const m = err.message?.match(/Email account id - (\d+) not allowed/);
+        if (m) {
+          const bad = Number(m[1]);
+          attachIds = attachIds.filter((id: number) => id !== bad);
+          retries++;
+        } else throw err;
+      }
+    }
+    if (!attached || !attachIds.length) {
+      throw new Error(`Failed to attach inboxes to campaign ${campaignId} after ${retries} retries`);
+    }
+    console.error(`  ✓ ${attachIds.length} inboxes attached (tag=${v.inbox_selection.tag}, LRU)`);
+    state.inboxesDone = true;
+    saveState();
+  }
+
+  // 6. Upload leads in batches (resumes at state.leadsUploaded)
+  let uploaded = state.leadsUploaded;
+  if (uploaded > 0) console.error(`  Resuming lead upload at offset ${uploaded}/${leads.length}`);
+  const failedBatches: string[] = [];
+  let firstFailedAt = -1;
+  for (let i = state.leadsUploaded; i < leads.length; i += LEADS_BATCH) {
     const batch = leads.slice(i, i + LEADS_BATCH).map((l) => {
       const custom_fields: Record<string, string> = {};
       for (const h of headers) {
@@ -413,7 +553,22 @@ async function main() {
       await slPost(`/campaigns/${campaignId}/leads`, { lead_list: batch });
       uploaded += batch.length;
       process.stdout.write(`  ${uploaded}/${leads.length} leads uploaded\r`);
+      // Only advance the checkpoint while no batch has failed — otherwise a
+      // crash before step 9 would persist an offset past the failed batch and
+      // the rerun would silently skip those leads forever.
+      if (firstFailedAt === -1) {
+        state.leadsUploaded = i + batch.length;
+        saveState();
+      }
     } catch (err: any) {
+      failedBatches.push(`${i}-${i + LEADS_BATCH}`);
+      if (firstFailedAt === -1) {
+        firstFailedAt = i;
+        // Pin the checkpoint at the first failed batch immediately so even a
+        // hard kill mid-loop leaves the state file pointing at the retry spot.
+        state.leadsUploaded = i;
+        saveState();
+      }
       console.error(`\n  ⚠ batch ${i}-${i + LEADS_BATCH} failed: ${err.message?.slice(0, 200)}`);
     }
     await new Promise((r) => setTimeout(r, 300));
@@ -421,26 +576,48 @@ async function main() {
   console.error(`\n  ✓ ${uploaded} leads uploaded`);
 
   // 7. Settings (track off, stop on reply)
-  await slPost(`/campaigns/${campaignId}/settings`, {
-    track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
-    stop_lead_settings: "REPLY_TO_AN_EMAIL",
-    send_as_plain_text: false,
-    enable_ai_esp_matching: false,
-  });
-  console.error(`  ✓ Settings saved (tracking off, stop on reply)`);
+  if (state.settingsDone) {
+    console.error(`  ✓ Settings already saved (resumed)`);
+  } else {
+    await slPost(`/campaigns/${campaignId}/settings`, {
+      track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
+      stop_lead_settings: "REPLY_TO_AN_EMAIL",
+      send_as_plain_text: false,
+      enable_ai_esp_matching: false,
+    });
+    console.error(`  ✓ Settings saved (tracking off, stop on reply)`);
+    state.settingsDone = true;
+    saveState();
+  }
 
   // 8. Schedule
-  await slPost(`/campaigns/${campaignId}/schedule`, {
-    timezone: v.schedule.timezone,
-    days_of_the_week: v.schedule.days,
-    start_hour: v.schedule.start_hour,
-    end_hour: v.schedule.end_hour,
-    min_time_btw_emails: v.schedule.min_time_btw_emails,
-    max_new_leads_per_day: v.schedule.max_leads_per_day,
-  });
-  console.error(`  ✓ Schedule set (${v.schedule.timezone}, ${v.schedule.start_hour}-${v.schedule.end_hour})`);
+  if (state.scheduleDone) {
+    console.error(`  ✓ Schedule already set (resumed)`);
+  } else {
+    await slPost(`/campaigns/${campaignId}/schedule`, {
+      timezone: v.schedule.timezone,
+      days_of_the_week: v.schedule.days,
+      start_hour: v.schedule.start_hour,
+      end_hour: v.schedule.end_hour,
+      min_time_btw_emails: v.schedule.min_time_btw_emails,
+      max_new_leads_per_day: v.schedule.max_leads_per_day,
+    });
+    console.error(`  ✓ Schedule set (${v.schedule.timezone}, ${v.schedule.start_hour}-${v.schedule.end_hour})`);
+    state.scheduleDone = true;
+    saveState();
+  }
 
   // 9. DRAFT only. Do not activate.
+  if (failedBatches.length) {
+    // Checkpoint already points at the first failed batch (pinned in the loop),
+    // so a rerun retries it (Smartlead ignores leads already present in the campaign).
+    console.error(`\n⚠ ${leads.length - uploaded} leads failed in batches: ${failedBatches.join(", ")}`);
+    console.error(`  Re-run the same command to retry (state saved to ${statePath}).`);
+    process.exitCode = 1;
+  } else {
+    try { unlinkSync(statePath); } catch { /* already gone */ }
+  }
+
   console.log(``);
   console.log(`✓ Campaign #${campaignId} created in DRAFT`);
   console.log(``);

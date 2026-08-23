@@ -16,6 +16,11 @@ import { dirname } from "path";
 const API_BASE = "https://server.smartlead.ai/api/v1";
 const API_KEY = process.env.SMARTLEAD_API_KEY;
 
+if (!API_KEY) {
+  console.error("Missing env var: SMARTLEAD_API_KEY");
+  process.exit(1);
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const get = (flag: string) => {
@@ -42,16 +47,41 @@ const POSITIVE_LABELS = new Set([
 const EXCLUDED_FROM_DENOMINATOR = new Set(["ooo", "bounce"]);
 
 async function fetchCampaignStats(campaignId: string): Promise<{ sent: number }> {
-  if (!API_KEY) throw new Error("SMARTLEAD_API_KEY not set");
   const url = new URL(`${API_BASE}/campaigns/${campaignId}/statistics`);
-  url.searchParams.set("api_key", API_KEY);
-  const resp = await fetch(url.toString());
-  if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => "")}`);
+  url.searchParams.set("api_key", API_KEY!);
+  // Use the pathname in messages — the full URL carries api_key as a query param.
+  const pathname = url.pathname;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url.toString(), { signal: AbortSignal.timeout(30_000) });
+    } catch {
+      const wait = 1000 * 2 ** attempt;
+      console.error(`  [network error] ${pathname} retry in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+    if (resp.status === 429 || resp.status >= 500) {
+      const wait = 1000 * 2 ** attempt;
+      console.error(`  [${resp.status}] retry in ${wait}ms`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      throw new Error(`HTTP ${resp.status} from ${pathname}: ${body.slice(0, 200)}`);
+    }
+    const text = await resp.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Invalid JSON from ${pathname}: ${text.slice(0, 200)}`);
+    }
+    const sent = data.sent_count ?? data.total_sent ?? data.sent ?? 0;
+    return { sent: Number(sent) };
   }
-  const data = await resp.json();
-  const sent = data.sent_count ?? data.total_sent ?? data.sent ?? 0;
-  return { sent: Number(sent) };
+  throw new Error(`Exhausted retries for ${pathname}`);
 }
 
 function pct(n: number, d: number): string {
@@ -61,8 +91,17 @@ function pct(n: number, d: number): string {
 
 async function main() {
   const { replies: replyPath, campaignId, out } = parseArgs();
-  const classified: { lead_id: string; label: string; confidence?: number; reason?: string }[] =
-    JSON.parse(readFileSync(replyPath, "utf8"));
+  let classified: { lead_id: string; label: string; confidence?: number; reason?: string }[];
+  try {
+    classified = JSON.parse(readFileSync(replyPath, "utf8"));
+  } catch (err: any) {
+    console.error(`Cannot read --replies file ${replyPath}: ${err.message}`);
+    process.exit(1);
+  }
+  if (!Array.isArray(classified)) {
+    console.error("--replies must be a JSON array of {lead_id, label} objects");
+    process.exit(1);
+  }
 
   const { sent } = await fetchCampaignStats(campaignId);
 

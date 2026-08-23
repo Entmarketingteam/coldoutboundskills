@@ -2,13 +2,13 @@
 
 Open-source [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) for cold email infrastructure, lead sourcing, copywriting, and operations. Built by [GrowthEngineX](https://growthengine-x.com) from patterns across 1,000+ real B2B campaigns.
 
-28 skills that work together. Clone the repo, bring your API keys, point Claude Code at it, go from zero to a running campaign.
+30 skills that work together. Clone the repo, bring your API keys, point Claude Code at it, go from zero to a running campaign.
 
 **New here?** Invoke `/cold-email-kickoff` — it's the guided entry point that orchestrates ICP + lead magnet + strategy + plan in one flow.
 
 ## What's in here
 
-29 skills organized in 5 tracks.
+30 skills organized in 5 tracks, plus 19 signal playbooks in Track 6 — each shipping three ways (a Claude skill, a Clay table build, and a Clay CLI workflow).
 
 **New to cold email? Start with `/cold-email-kickoff`.** It orchestrates ICP → lead magnet → campaign strategy → plan in one guided flow.
 
@@ -26,6 +26,8 @@ Open-source [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/
 - **`deliverability-incident-response`** — triage playbook for spam, bounces, blacklists, warmup blocks
 
 ### Track 3 — List Building
+- **`list-builder`** — the meta skill for any list request: one-command lanes that sweep every source, AI-qualify every company, snowball until the market is dry, then pull uncapped contacts and find emails
+- **`list-expander`** — turn ~10 known-good seed companies into a full qualified TAM (fingerprint → lookalikes → mined filters → wide pull → AI qualification → live-site verify)
 - **`prospeo-full-export`** — title-first lead search (paginated, 25K+)
 - **`prospeo-search-api`** — Prospeo filter reference
 - **`blitz-list-builder`** — domain-first contact discovery
@@ -50,6 +52,35 @@ Open-source [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/
 - **`personalization-subagent-pattern`** — reusable pattern for per-lead Claude sub-agent personalization
 - **`deliverability-test-public`** — compare reply/bounce by inbox type
 - **`cold-email-weekly-rhythm`** — Monday/Wednesday/Friday operational playbook — what separates hobbyist from top-1%
+
+
+### Track 6 — Signal Playbooks
+
+Nineteen playbooks, each turning **one buying signal into one copy-ready sentence**. They live
+together in **[`skills/playbooks/`](skills/playbooks/)** — start at
+[`clay-playbooks`](skills/playbooks/clay-playbooks/) for the index and the two build harnesses.
+
+Every playbook ships the same three files:
+
+| File | What it is |
+|---|---|
+| `SKILL.md` | the playbook: source chain, output contract, locked prompt, edge cases |
+| `clay-table.md` | the Clay **table** build — columns, formulas, credit gates (browser-driven) |
+| `clay-workflow.md` | the Clay **workflow** build via the `clay` CLI (terminal-driven) |
+
+*Tables are browser-driven and workflows are CLI-driven because of a real constraint: the `clay` CLI
+is read-only for tables, but can create, edit and publish workflows.*
+
+- **Person signals** — `new-in-role` · `linkedin-engagement` · `social-posts` · `warm-intros`
+- **Company signals** — `fundraising` · `hiring-surge` · `job-posting-language` · `ad-library`
+- **Website signals** — `pricing-page` · `case-study-page` · `tech-on-website` · `google-site-search`
+- **List shaping** — `company-name-cleaning` · `first-name-cleaning` · `social-link-finding` · `lookalikes` · `name-to-other-prospects`
+- **Copy generation** — `ai-specificity` · `creative-ideas`
+
+⚠️ Each `SKILL.md` carries a verification line saying what was actually run and on how many rows. The
+`clay-table.md` and `clay-workflow.md` files are documented recipes that **have not been built and run
+in a live Clay workspace** — written against the real Clay action catalog and CLI surface, but treat
+them as specifications: build one, run 5 rows, read the output, fix the file.
 
 ## Getting started
 

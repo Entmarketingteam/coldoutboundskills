@@ -11,8 +11,9 @@
  *   npx tsx scripts/phase-apollo.ts --filters-file=/tmp/auto/filters.json --max-leads=1000 --out=/tmp/auto/leads.json
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "fs";
 import { dirname } from "path";
+import { createHash } from "crypto";
 
 const API_KEY = process.env.APOLLO_API_KEY;
 if (!API_KEY) {
@@ -28,12 +29,44 @@ function parseArgs() {
     const arg = args.find((a) => a.startsWith(`${flag}=`));
     return arg ? arg.split("=").slice(1).join("=") : undefined;
   };
+  const maxLeads = Number(get("--max-leads") ?? 1000);
+  const maxPages = Number(get("--max-pages") ?? 40);
+  if (!Number.isInteger(maxLeads) || maxLeads < 1 || !Number.isInteger(maxPages) || maxPages < 1) {
+    console.error("--max-leads and --max-pages must be positive integers");
+    process.exit(1);
+  }
   return {
     filtersFile: get("--filters-file"),
-    maxLeads: Number(get("--max-leads") ?? 1000),
-    maxPages: Number(get("--max-pages") ?? 40),
+    maxLeads,
+    maxPages,
     out: get("--out") ?? "/tmp/auto/leads.json",
   };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Bounded retry with exponential backoff on 429/5xx/network errors
+// (pattern from cold-email-starter-kit/scripts/_lib.ts retry()).
+async function fetchWithRetry(url: string, init: RequestInit, label: string, attempts = 5): Promise<Response> {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const resp = await fetch(url, { ...init, signal: AbortSignal.timeout(30000) });
+      if (resp.status === 429 || resp.status >= 500) {
+        lastErr = new Error(`${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`);
+      } else {
+        return resp;
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+    if (i < attempts - 1) {
+      const delay = Math.min(1000 * 2 ** i, 30000);
+      console.error(`[Apollo] ${label} attempt ${i + 1}/${attempts} failed (${lastErr?.message ?? lastErr}) — retrying in ${delay / 1000}s`);
+      await sleep(delay);
+    }
+  }
+  throw new Error(`[Apollo] ${label} failed after ${attempts} attempts: ${lastErr?.message ?? lastErr}`);
 }
 
 interface Lead {
@@ -80,27 +113,31 @@ function buildApolloParams(filters: any, page: number) {
 
 async function searchPage(params: any): Promise<{ people: any[]; total: number }> {
   const { api_key, ...body } = params;
-  const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-cache",
-      "X-Api-Key": api_key as string,
+  // 429/5xx retried inside fetchWithRetry; throws after retries are exhausted
+  const resp = await fetchWithRetry(
+    `${APOLLO_BASE}/mixed_people/api_search`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "X-Api-Key": api_key as string,
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
+    "search"
+  );
 
-  if (resp.status === 429) {
-    console.error("[Apollo] Rate limited — waiting 10s");
-    await new Promise((r) => setTimeout(r, 10000));
-    return { people: [], total: 0 };
-  }
   if (!resp.ok) {
-    console.error(`[Apollo] ${resp.status}: ${await resp.text().catch(() => "")}`);
-    return { people: [], total: 0 };
+    throw new Error(`[Apollo] search ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 300)}`);
   }
 
-  const data = await resp.json();
+  let data: any;
+  try {
+    data = await resp.json();
+  } catch {
+    throw new Error("[Apollo] search: response was not valid JSON");
+  }
   return {
     people: data.people ?? [],
     total: data.pagination?.total_entries ?? 0,
@@ -108,6 +145,7 @@ async function searchPage(params: any): Promise<{ people: any[]; total: number }
 }
 
 // Apollo search returns obfuscated stubs — bulk_match returns full person objects with all fields
+let bulkMatchFailures = 0;
 async function bulkMatchPeople(stubs: any[]): Promise<any[]> {
   if (!stubs.length) return [];
 
@@ -119,26 +157,32 @@ async function bulkMatchPeople(stubs: any[]): Promise<any[]> {
   for (let i = 0; i < ids.length; i += CHUNK) {
     const chunk = ids.slice(i, i + CHUNK);
     try {
-      const resp = await fetch(`${APOLLO_BASE}/people/bulk_match`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-cache",
-          "X-Api-Key": API_KEY as string,
+      const resp = await fetchWithRetry(
+        `${APOLLO_BASE}/people/bulk_match`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+            "X-Api-Key": API_KEY as string,
+          },
+          body: JSON.stringify({
+            details: chunk.map((id: string) => ({ id })),
+            reveal_personal_emails: false,
+          }),
         },
-        body: JSON.stringify({
-          details: chunk.map((id: string) => ({ id })),
-          reveal_personal_emails: false,
-        }),
-      });
+        "bulk_match"
+      );
       if (resp.ok) {
         const data = await resp.json();
         results.push(...(data.matches ?? []));
       } else {
-        console.error(`[Apollo bulk_match] ${resp.status}: ${await resp.text().catch(() => "")}`);
+        bulkMatchFailures++;
+        console.error(`[Apollo bulk_match] ${resp.status}: ${(await resp.text().catch(() => "")).slice(0, 200)}`);
       }
-    } catch (e) {
-      console.error("[Apollo bulk_match] Error:", e);
+    } catch (e: any) {
+      bulkMatchFailures++;
+      console.error(`[Apollo bulk_match] Error: ${e?.message ?? e}`);
     }
     if (i + CHUNK < ids.length) await new Promise((r) => setTimeout(r, 300));
   }
@@ -169,12 +213,48 @@ async function main() {
     process.exit(1);
   }
 
-  const filters = JSON.parse(readFileSync(filtersFile, "utf8"));
-  const all: Lead[] = [];
+  let filters: any;
+  let filtersHash = "";
+  try {
+    const raw = readFileSync(filtersFile, "utf8");
+    filtersHash = createHash("sha256").update(raw).digest("hex").slice(0, 16);
+    filters = JSON.parse(raw);
+  } catch (e: any) {
+    console.error(`Cannot read filters file ${filtersFile}: ${e?.message ?? e}`);
+    process.exit(1);
+  }
+
+  // Resume from a partial checkpoint if a previous run crashed mid-pagination.
+  // Provenance-tagged (script + filters hash) so a checkpoint left by phase-prospeo.ts
+  // (same --out default) or a run with different filters is never silently resumed.
+  const CHECKPOINT_SOURCE = "phase-apollo";
+  const partialFile = `${out}.partial.json`;
+  let all: Lead[] = [];
+  let startPage = 1;
+  if (existsSync(partialFile)) {
+    try {
+      const partial = JSON.parse(readFileSync(partialFile, "utf8"));
+      if (partial.source !== CHECKPOINT_SOURCE || partial.filtersHash !== filtersHash) {
+        console.error(
+          `[Apollo] Ignoring checkpoint ${partialFile} (source=${partial.source ?? "unknown"}, script/filters mismatch) — starting fresh`
+        );
+      } else {
+        all = partial.leads ?? [];
+        startPage = (partial.lastPage ?? 0) + 1;
+        console.error(`[Apollo] Resuming from ${partialFile}: ${all.length} leads, page ${startPage}`);
+      }
+    } catch {
+      console.error(`[Apollo] Ignoring unreadable checkpoint ${partialFile}`);
+    }
+  }
+  const writePartial = (lastPage: number) => {
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(partialFile, JSON.stringify({ source: CHECKPOINT_SOURCE, filtersHash, lastPage, leads: all }));
+  };
 
   console.error(`[Apollo] Searching up to ${maxPages} pages / ${maxLeads} leads...`);
 
-  for (let page = 1; page <= maxPages; page++) {
+  for (let page = startPage; page <= maxPages; page++) {
     const params = buildApolloParams(filters, page);
     const { people, total } = await searchPage(params);
 
@@ -189,6 +269,7 @@ async function main() {
       .filter((l) => industryMatches(l.company_industry, filters.industries ?? []));
     all.push(...mapped);
 
+    writePartial(page); // checkpoint so a crash/rerun resumes instead of re-spending credits
     if (page % 5 === 0) console.error(`[Apollo] Page ${page}: ${all.length} leads so far`);
     if (all.length >= maxLeads) break;
 
@@ -202,9 +283,19 @@ async function main() {
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(
     out,
-    JSON.stringify({ leads, stats: { total: leads.length, withEmail, withDesc } }, null, 2)
+    JSON.stringify(
+      { leads, stats: { total: leads.length, withEmail, withDesc, bulk_match_failures: bulkMatchFailures } },
+      null,
+      2
+    )
   );
+  rmSync(partialFile, { force: true });
+  if (bulkMatchFailures) console.error(`[Apollo] ${bulkMatchFailures} bulk_match chunk(s) failed`);
   console.error(`\nWrote ${out} — ${leads.length} leads (${withEmail} with email, ${withDesc} with desc)`);
+  if (!leads.length) {
+    console.error("[Apollo] No leads found — failing so the pipeline halts");
+    process.exit(1);
+  }
 }
 
 main().catch((e) => {
